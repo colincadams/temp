@@ -21,8 +21,8 @@ export const GMC_1976 = {
   name: "1976 GMC Motorhome",
   engine: "Olds 455 V8",
   transmission: "TH425 3-speed auto",
-  flatCruiseMph: 58, // relaxed cruising speed on the level
-  flatMaxMph: 63, // don't-exceed on the level
+  flatCruiseMph: 62, // comfortable all-day cruise (455 loafs here)
+  flatMaxMph: 68, // don't-exceed on the level — keep margin below tire/heat limits
   minCruiseMph: 25, // floor for suggestions on steep grades
   gearNames: { D: "DRIVE", "2": "2nd", "1": "LOW" },
 };
