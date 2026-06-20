@@ -29,30 +29,30 @@ barometer later just makes the same number better.
 
 ## Motorhome advisor (1976 GMC)
 
-Below the grade, three tiles show **suggested speed**, **max speed**, and the
-**gear** (selector position) for a 1976 GMC Motorhome — Olds 455 V8 with the
-TH425 3-speed automatic, so gear is `DRIVE`, `2`, or `LOW` — plus an estimated
-**rpm** readout so you can sanity-check against your tach.
+Below the grade, an **estimated tachometer** (SVG arc gauge with colored zones
+and a torque-peak marker) shows the engine rpm computed from your road speed and
+the recommended gear, with the **gear** (`DRIVE`/`2`/`LOW` on the TH425) in its
+center. Flanking tiles show **suggested speed** and **max speed**.
 
 The climb logic is built around **avoiding overheating**, the 455's classic
 weak point. Because the coach is geared tall (~2,375 rpm at 60 in top), it lugs
-easily on grades, and a lugging big-block under load is what cooks it. So:
+easily on grades, and a lugging big-block under load is what cooks it. This
+behavior is **always on** — there's no "hot mode" to remember, it just always
+drives like it's hot:
 
-- **Climbing:** the app **downshifts to keep the engine near/above its torque
+- **Climbing:** the app **downshifts to keep the engine at/above its torque
   peak (~2,400 rpm)** so the water pump and fan move enough air and coolant
   (GMC owners run 3,500–4,500 rpm up long grades for exactly this), and it
-  **eases the suggested speed down** as the grade steepens to cut the power
-  demand. The **max** tile is the fastest you should hold in that gear before
-  revs/heat climb too far.
-- **Hot mode** (the `Hot` button — tap it in warm weather or when heavily
-  loaded): downshifts sooner to keep revs higher, lowers the suggested speed
-  more, and flags steep climbs red earlier.
+  **eases the suggested speed down generously** as the grade steepens to cut the
+  power demand. The **max** tile is the fastest you should hold in that gear
+  before revs/heat climb too far.
 - **Descending:** engine-brake instead of riding the brakes — the app holds the
   lowest gear that won't over-rev at a conservative, brake-fade-safe speed
   (DRIVE on gentle grades, 2nd from ~6%, LOW on the steepest).
 
-Color reflects safety/heat status (neutral → amber when a cooling downshift or
-ease-off is advised → red when you should act now).
+Color (the grade number, the gear, the tiles) reflects safety/heat status:
+neutral → amber when a cooling downshift or ease-off is advised → red when you
+should act now.
 
 The big number's **color reflects safety status, not just incline**:
 

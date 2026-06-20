@@ -79,7 +79,7 @@ body {
   gap: 4px;
 }
 .arrow {
-  font-size: clamp(40px, 14vw, 96px);
+  font-size: clamp(28px, 9vw, 56px);
   line-height: 1;
   transition: color 0.3s, transform 0.3s;
   color: var(--flat);
@@ -92,17 +92,17 @@ body {
   color: var(--flat);
 }
 .sign {
-  font-size: clamp(48px, 14vw, 120px);
+  font-size: clamp(34px, 10vw, 72px);
   font-weight: 700;
 }
 .magnitude {
-  font-size: clamp(110px, 36vw, 280px);
+  font-size: clamp(78px, 26vw, 170px);
   font-weight: 800;
   letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums;
 }
 .unit {
-  font-size: clamp(40px, 11vw, 96px);
+  font-size: clamp(30px, 9vw, 64px);
   font-weight: 700;
   margin-left: 6px;
 }
@@ -200,14 +200,14 @@ body {
   color: var(--warn);
 }
 
-.rpm {
+.tach {
   margin-top: 10px;
-  min-height: 1em;
-  font-size: clamp(13px, 3.6vw, 16px);
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
+  width: min(60vw, 230px);
+}
+.tach-svg {
+  width: 100%;
+  height: auto;
+  display: block;
 }
 
 .confidence {
@@ -245,16 +245,6 @@ body {
 }
 .ghost-btn:active {
   background: var(--bg-2);
-}
-.btn-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-#hotToggle.hot-on {
-  border-color: var(--warn);
-  color: var(--warn);
-  background: rgba(255, 69, 58, 0.12);
 }
 .sources {
   list-style: none;

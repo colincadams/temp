@@ -38,14 +38,12 @@
 
         <div id="statusMsg" class="status-msg">Tap start to begin</div>
 
+        <div class="tach" id="tach"></div>
+
         <div class="advice" id="advice" data-status="ok">
           <div class="tile">
             <div class="tile-val" id="suggestedVal">--</div>
             <div class="tile-lbl">suggested mph</div>
-          </div>
-          <div class="tile gear">
-            <div class="tile-val" id="gearVal">--</div>
-            <div class="tile-lbl" id="gearLbl">gear</div>
           </div>
           <div class="tile">
             <div class="tile-val" id="maxVal">--</div>
@@ -53,16 +51,11 @@
           </div>
         </div>
 
-        <div class="rpm" id="rpmReadout"></div>
-
         <div class="confidence"><div id="confBar" class="confidence-bar"></div></div>
       </section>
 
       <footer class="bottombar">
-        <div class="btn-stack">
-          <button id="hotToggle" class="ghost-btn">Hot: off</button>
-          <button id="unitToggle" class="ghost-btn">Show °</button>
-        </div>
+        <button id="unitToggle" class="ghost-btn">Show °</button>
         <ul id="sourceStatus" class="sources"></ul>
         <button id="stopBtn" class="ghost-btn">Stop</button>
       </footer>

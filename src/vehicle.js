@@ -7,19 +7,17 @@
 // The priority on this coach is AVOIDING OVERHEATING on climbs. The 455 is
 // geared tall (~2,375 rpm at 60 in top), so on a grade it lugs easily — and a
 // lugging big-block under sustained load is what cooks it (and spikes the trans
-// temp). The fix, which is also standard GMC-owner practice, is:
-//   • Climb: downshift to keep the engine in/above its torque peak (~2,400 rpm)
+// temp). The fix, which is also standard GMC-owner practice, is baked in as the
+// always-on behavior (no "hot mode" to remember to switch on):
+//   • Climb: downshift to keep the engine at/above its torque peak (~2,400 rpm)
 //     so the water pump and fan spin fast enough to shed heat — owners happily
 //     run 3,500–4,500 rpm up long grades. Keeping revs UP matters more than
 //     keeping them low.
 //   • Climb: also ease off the throttle/speed as it steepens — less power
-//     demanded = less heat made. So on a steep hot grade you both slow down AND
+//     demanded = less heat made. So on a steep grade you both slow down AND
 //     hold a lower gear.
 //   • Descend: let engine braking (a low gear) hold your speed instead of riding
 //     the brakes; keep revs below the sustain limit.
-//
-// "Hot mode" (warm-weather / heavy-load) shifts everything more conservative:
-// downshift sooner to keep revs higher, and back off speed more.
 //
 // These are general guidelines, not factory specs. The drivetrain numbers are
 // calibrated to owner-reported data (3.07 final drive, ~2,375 rpm @ 60 in top,
@@ -39,10 +37,8 @@ export const GMC_1976 = {
   tireRevsPerMile: 774, // effective; chosen to match the 2,375 rpm @ 60 figure
   gearRatios: { D: 1.0, "2": 1.48, "1": 2.48 },
 
-  // Cooling-oriented climb window.
-  torquePeakRpm: 2400, // 370 lb-ft here — the heart of the pulling range
-  coolingClimbRpm: 2000, // keep climbing revs at/above this (no lugging, fan/pump moving)
-  hotWeatherRpmBump: 400, // Hot mode lifts the climb-rpm floor to ~the torque peak
+  // Cooling-oriented climb window (always on — drive like it's hot).
+  torquePeakRpm: 2400, // 370 lb-ft here; also the climb rpm floor (keep revs here+)
   maxSustainRpm: 4200, // don't hold above this (owners run 4–4.5k on long grades)
 
   minCruiseMph: 25, // floor for speed suggestions on steep grades
@@ -68,7 +64,7 @@ const speedAtRpm = (p, gear, rpm) => rpm / rpmPerMph(p, gear);
  *            message:string}}
  */
 export function advise(gradePercent, speedMph, opts = {}) {
-  const { hot = false, profile: p = GMC_1976 } = opts;
+  const { profile: p = GMC_1976 } = opts;
   const grade = Number.isFinite(gradePercent) ? gradePercent : 0;
   const s = Number.isFinite(speedMph) ? speedMph : null;
   const up = grade > 0.5;
@@ -79,22 +75,19 @@ export function advise(gradePercent, speedMph, opts = {}) {
   let rank, suggested, max;
 
   if (up) {
-    // Ease off as the hill steepens to cut the power demand (and heat); Hot mode
-    // backs off more.
-    const speedDrop = hot ? 4.5 : 3.5;
-    suggested = clamp(p.flatCruiseMph - speedDrop * grade, p.minCruiseMph, p.flatCruiseMph);
+    // Ease off as the hill steepens to cut the power demand (and heat). This
+    // coach isn't about getting anywhere fast, so we back off generously.
+    suggested = clamp(p.flatCruiseMph - 4.5 * grade, p.minCruiseMph, p.flatCruiseMph);
 
     if (grade < CLIMB_COOL_GRADE) {
       rank = 3; // gentle climb — DRIVE is fine, little heat at stake
     } else {
-      // Keep revs at/above the cooling floor so the pump & fan move: hold the
-      // TALLEST gear that still clears the floor at our (current or target)
-      // speed. Hot mode raises the floor toward the torque peak.
-      const rpmFloor = p.coolingClimbRpm + (hot ? p.hotWeatherRpmBump : 0);
+      // Keep revs at/above the torque peak so the pump & fan shed heat: hold the
+      // TALLEST gear that still clears the floor at our (current or target) speed.
       const atSpeed = s ?? suggested;
       rank = 1;
       for (const g of ["D", "2", "1"]) {
-        if (rpmAt(p, g, atSpeed) >= rpmFloor) {
+        if (rpmAt(p, g, atSpeed) >= p.torquePeakRpm) {
           rank = RANK[g];
           break;
         }
@@ -145,10 +138,9 @@ export function advise(gradePercent, speedMph, opts = {}) {
     level = s != null && s > suggested ? "warn" : "caution";
     message = `Steep descent — engine-brake in ${gearLabel}`;
   } else if (up && rank < 3) {
-    // A cooling downshift is advised. Hot + steep is the real overheat danger.
-    level = hot && steep ? "warn" : "caution";
-    const why = hot ? "to run cooler" : "keep revs up";
-    message = `${steep ? "Steep" : "Long"} climb — hold ${gearLabel}, ${why}`;
+    // A cooling downshift is advised to keep revs up and avoid lugging.
+    level = "caution";
+    message = `${steep ? "Steep" : "Long"} climb — hold ${gearLabel}, keep revs up`;
   } else if (up && s != null && s > suggested + 2) {
     level = "caution";
     message = `Ease toward ${Math.round(suggested)} to run cooler`;

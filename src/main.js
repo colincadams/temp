@@ -9,6 +9,7 @@ import { ElevationApiSource } from "./sources/elevationApiSource.js";
 import { BarometerSource } from "./sources/barometerSource.js";
 import { formatGrade } from "./grade.js";
 import { advise } from "./vehicle.js";
+import { createTachometer } from "./tach.js";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -21,8 +22,6 @@ const els = {
   startBtn: $("startBtn"),
   stopBtn: $("stopBtn"),
   unitToggle: $("unitToggle"),
-  hotToggle: $("hotToggle"),
-  rpm: $("rpmReadout"),
   speed: $("speed"),
   gpsAcc: $("gpsAcc"),
   sourcePill: $("sourcePill"),
@@ -33,13 +32,13 @@ const els = {
   advice: $("advice"),
   suggestedVal: $("suggestedVal"),
   maxVal: $("maxVal"),
-  gearVal: $("gearVal"),
-  gearLbl: $("gearLbl"),
 };
+
+const STATUS_COLOR = { ok: "#f4f7fb", caution: "#ffb020", warn: "#ff453a" };
+const tach = createTachometer($("tach"), { torquePeak: 2400 });
 
 const state = {
   unit: localStorage.getItem("grade.unit") || "percent", // "percent" | "degrees"
-  hot: localStorage.getItem("grade.hot") === "1", // warm-weather conservatism
   running: false,
   lastUpdateTs: 0,
   wakeLock: null,
@@ -147,24 +146,20 @@ function render() {
 
   // --- Motorhome speed/gear advisor + safety-status coloring ---
   if (fresh && out.gradePercent != null) {
-    const a = advise(out.gradePercent, speedMph, { hot: state.hot });
+    const a = advise(out.gradePercent, speedMph);
     els.display.dataset.status = a.level;
     els.advice.dataset.status = a.level;
     els.statusMsg.textContent = a.message;
     els.suggestedVal.textContent = a.suggestedSpeedMph;
     els.maxVal.textContent = a.maxSpeedMph;
-    els.gearVal.textContent = a.gear;
-    els.gearLbl.textContent = a.gearLabel;
-    els.rpm.textContent = `≈ ${a.estimatedRpm.toLocaleString()} rpm`;
+    tach.update(a.estimatedRpm, { gear: a.gear, color: STATUS_COLOR[a.level] });
   } else {
     els.display.dataset.status = "ok";
     els.advice.dataset.status = "ok";
     els.statusMsg.textContent = state.running ? "Acquiring grade…" : "Tap start to begin";
     els.suggestedVal.textContent = "--";
     els.maxVal.textContent = "--";
-    els.gearVal.textContent = "--";
-    els.gearLbl.textContent = "gear";
-    els.rpm.textContent = "";
+    tach.update(NaN);
   }
   const acc = loc.lastFix?.accuracy;
   els.gpsAcc.textContent = Number.isFinite(acc) && acc < 9999 ? `±${Math.round(acc)} m` : "no GPS";
@@ -191,18 +186,6 @@ function toggleUnit() {
   render();
 }
 
-function applyHotUi() {
-  els.hotToggle.textContent = state.hot ? "Hot: ON" : "Hot: off";
-  els.hotToggle.classList.toggle("hot-on", state.hot);
-}
-
-function toggleHot() {
-  state.hot = !state.hot;
-  localStorage.setItem("grade.hot", state.hot ? "1" : "0");
-  applyHotUi();
-  render();
-}
-
 function isSecureContext() {
   return window.isSecureContext || location.hostname === "localhost";
 }
@@ -212,9 +195,7 @@ function isSecureContext() {
 els.startBtn.addEventListener("click", start);
 els.stopBtn.addEventListener("click", stop);
 els.unitToggle.addEventListener("click", toggleUnit);
-els.hotToggle.addEventListener("click", toggleHot);
 els.unitToggle.textContent = state.unit === "percent" ? "Show °" : "Show %";
-applyHotUi();
 
 if (!isSecureContext()) {
   showBanner("Heads up: GPS needs HTTPS. Host this on GitHub Pages or open via localhost.", "warn");
