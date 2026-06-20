@@ -24,6 +24,13 @@ export const GMC_1976 = {
   flatCruiseMph: 62, // comfortable all-day cruise (455 loafs here)
   flatMaxMph: 68, // don't-exceed on the level — keep margin below tire/heat limits
   minCruiseMph: 25, // floor for suggestions on steep grades
+  // Fastest road speed in each gear before the engine over-revs (a ~3,500 rpm
+  // sustained ceiling, well under the 455's redline). Derived from the TH425
+  // ratios (1st 2.48, 2nd 1.48, 3rd/DRIVE 1.00) assuming top gear turns
+  // ~2,600 rpm at 60 mph. DRIVE's real ceiling is the tire/flat limit, so it
+  // uses flatMaxMph. Adjust these if your final drive (3.07 vs 3.42) or tire
+  // size differs.
+  gearCeilingMph: { D: 68, "2": 55, "1": 33 },
   gearNames: { D: "DRIVE", "2": "2nd", "1": "LOW" },
 };
 
@@ -45,41 +52,39 @@ export function advise(gradePercent, speedMph, p = GMC_1976) {
   const moderate = mag >= 3;
   const steep = mag >= 6;
 
-  // --- Recommended gear (selector position) -------------------------------
-  // Climbing: track actual speed so we downshift as we slow (and never hold a
-  // gear that over-revs at speed). Descending: grade-driven, because we WANT a
-  // low gear for engine braking even before we've slowed down.
-  let rank;
+  // --- Recommended gear + suggested/max speed -----------------------------
+  // Unifying rule: `max` is never high enough to over-rev the recommended gear,
+  // so following the advice can't hurt the engine.
+  //  • Climbing: hold the highest gear that isn't lugging at your actual speed;
+  //    `max` is that gear's no-over-rev ceiling, so you know the fastest you can
+  //    safely be in it (and never downshift above it).
+  //  • Descending: pick a conservative brake-fade-safe speed, then use the
+  //    lowest gear that won't over-rev at that speed for engine braking.
+  let rank, suggested, max;
   if (up) {
-    if (s == null) rank = steep ? 1 : moderate ? 2 : 3;
-    else if (s >= 42) rank = 3; // DRIVE pulls fine at highway speed
-    else if (s >= 28) rank = 2; // hold 2nd through the mid-range
+    // Only downshift on grades steep enough that DRIVE would lug; on gentle
+    // grades the 455 pulls top gear fine at any reasonable speed.
+    if (!moderate) rank = 3;
+    else if (s == null) rank = steep ? 1 : 2;
+    else if (s >= 42) rank = 3; // DRIVE pulls fine at highway speed (~1,800+ rpm)
+    else if (s >= 28) rank = 2; // hold 2nd through the mid-range, no lugging
     else rank = 1; // crawling a steep grade — LOW
+    const g = GEAR_BY_RANK[rank];
+    suggested = clamp(p.flatCruiseMph - 3.5 * grade, p.minCruiseMph, p.flatCruiseMph);
+    max = g === "D" ? p.flatMaxMph : p.gearCeilingMph[g];
   } else if (down) {
-    rank = steep ? 1 : moderate ? 2 : 3;
+    suggested = clamp(p.flatCruiseMph - 3 * mag, p.minCruiseMph, p.flatCruiseMph);
+    max = clamp(p.flatMaxMph - 3.2 * mag, p.minCruiseMph, p.flatMaxMph);
+    if (max <= p.gearCeilingMph["1"]) rank = 1;
+    else if (max <= p.gearCeilingMph["2"]) rank = 2;
+    else rank = 3;
   } else {
     rank = 3;
-  }
-  const gear = GEAR_BY_RANK[rank];
-  const gearLabel = p.gearNames[gear];
-
-  // --- Suggested & max speed ---------------------------------------------
-  let suggested, max;
-  if (up) {
-    // Heavy + underpowered: speed falls off as the hill steepens.
-    suggested = clamp(p.flatCruiseMph - 3.5 * grade, p.minCruiseMph, p.flatCruiseMph);
-    max = p.flatMaxMph; // overspeed isn't the climbing risk — lugging is
-  } else if (down) {
-    // Safety-limited and intentionally conservative on steep grades: keep to a
-    // speed engine braking can hold in `gear`, well clear of brake-fade
-    // territory. Steeper -> lower, bottoming out around a walking-the-coach-down
-    // crawl on the nastiest descents.
-    suggested = clamp(p.flatCruiseMph - 4 * mag, 20, p.flatCruiseMph);
-    max = clamp(p.flatMaxMph - 4 * mag, 24, p.flatMaxMph);
-  } else {
     suggested = p.flatCruiseMph;
     max = p.flatMaxMph;
   }
+  const gear = GEAR_BY_RANK[rank];
+  const gearLabel = p.gearNames[gear];
 
   // --- Status / urgency (drives the color) --------------------------------
   // Red = slow down &/or shift down NOW. Amber = ease off or a downshift is

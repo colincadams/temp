@@ -35,9 +35,15 @@ TH425 3-speed automatic, so gear is `DRIVE`, `2`, or `LOW`. The guidance follows
 old-coach mountain-driving practice:
 
 - **Climbing:** downshift as you slow so the engine stays in its torque band
-  instead of lugging; expect to give up speed on grades.
-- **Descending:** descend in the same low gear you'd climb in and let engine
-  braking hold your speed, rather than riding the brakes down a long grade.
+  instead of lugging; expect to give up speed on grades. Uphill, the **max** tile
+  shows the fastest you can safely run in the recommended gear *without
+  over-revving* (DRIVE ≈ tire/flat limit, 2nd ≈ 55, LOW ≈ 33) — so you never drop
+  a gear at too high a speed.
+- **Descending:** let engine braking hold your speed instead of riding the
+  brakes. The app picks the lowest gear that won't over-rev at a conservative,
+  brake-fade-safe speed (2nd on most grades, LOW on the steepest), and the
+  **max** tile is that safe speed. Net rule: following `max` never over-revs the
+  recommended gear.
 
 The big number's **color reflects safety status, not just incline**:
 
