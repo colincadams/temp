@@ -186,17 +186,21 @@ body {
   text-transform: uppercase;
   color: var(--muted);
 }
-.tile.gear .tile-val {
-  color: var(--accent);
+/* The current-speed tile is highlighted by status so you can see at a glance
+   whether you're inside the suggested/max band. */
+.tile.speed-tile {
+  border-color: #2a3646;
 }
-/* Highlight the gear tile when a downshift is advised. */
-.advice[data-status="caution"] .tile.gear {
+.advice[data-status="caution"] .speed-tile {
   border-color: var(--caution);
 }
-.advice[data-status="warn"] .tile.gear {
+.advice[data-status="caution"] .speed-tile .tile-val {
+  color: var(--caution);
+}
+.advice[data-status="warn"] .speed-tile {
   border-color: var(--warn);
 }
-.advice[data-status="warn"] .tile.gear .tile-val {
+.advice[data-status="warn"] .speed-tile .tile-val {
   color: var(--warn);
 }
 

@@ -22,7 +22,7 @@ const els = {
   startBtn: $("startBtn"),
   stopBtn: $("stopBtn"),
   unitToggle: $("unitToggle"),
-  speed: $("speed"),
+  speedVal: $("speedVal"),
   gpsAcc: $("gpsAcc"),
   sourcePill: $("sourcePill"),
   sources: $("sourceStatus"),
@@ -142,7 +142,7 @@ function render() {
   // Secondary readouts.
   const sp = loc.lastFix?.speed;
   const speedMph = Number.isFinite(sp) ? sp * 2.23694 : null;
-  els.speed.textContent = speedMph != null ? `${Math.round(speedMph)} mph` : "-- mph";
+  els.speedVal.textContent = speedMph != null ? Math.round(speedMph) : "--";
 
   // --- Motorhome speed/gear advisor + safety-status coloring ---
   if (fresh && out.gradePercent != null) {
