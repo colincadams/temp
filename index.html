@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no"
+    />
+    <title>Grade</title>
+    <meta name="theme-color" content="#0b0f14" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Grade" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./icons/icon-180.png" />
+    <link rel="icon" type="image/png" href="./icons/icon-192.png" />
+    <link rel="stylesheet" href="./app.css" />
+  </head>
+  <body>
+    <main class="app">
+      <div id="banner" class="banner" hidden></div>
+
+      <header class="topbar">
+        <div class="stat"><span id="speed">-- mph</span></div>
+        <div id="sourcePill" class="pill">acquiring…</div>
+        <div class="stat right"><span id="gpsAcc">no GPS</span></div>
+      </header>
+
+      <section id="display" class="display" data-direction="flat">
+        <div class="arrow" id="arrow">•</div>
+        <div class="number">
+          <span class="sign" id="sign"></span>
+          <span class="magnitude" id="magnitude">--</span>
+          <span class="unit" id="unitLabel">%</span>
+        </div>
+        <div class="caption">road grade</div>
+        <div class="confidence"><div id="confBar" class="confidence-bar"></div></div>
+      </section>
+
+      <footer class="bottombar">
+        <button id="unitToggle" class="ghost-btn">Show °</button>
+        <ul id="sourceStatus" class="sources"></ul>
+        <button id="stopBtn" class="ghost-btn">Stop</button>
+      </footer>
+
+      <p class="disclaimer">
+        Estimate only. Mount your phone — don't hold or stare at it while driving.
+      </p>
+    </main>
+
+    <div id="overlay" class="overlay">
+      <div class="overlay-card">
+        <div class="overlay-arrow">▲</div>
+        <h1>Highway Grade</h1>
+        <p>
+          Shows the slope of the road you're driving, as a big number. Uses your
+          location plus an elevation map; add a barometer in a native build for
+          higher accuracy.
+        </p>
+        <button id="startBtn" class="start-btn">Start</button>
+        <small>Allow location access when prompted. Best mounted in the car.</small>
+      </div>
+    </div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
