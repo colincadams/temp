@@ -4,16 +4,26 @@
 // front-wheel drive. So "gear" here means the selector position you should hold:
 //   D (DRIVE, lets it use 3rd/top), 2 (holds 2nd), 1 (LOW, holds 1st).
 //
-// Guiding principles for an old, heavy, modestly-powered coach:
-//  • Climbing: downshift so the engine stays in its torque band instead of
-//    lugging in top gear; expect to lose speed on grades — that's normal.
-//  • Descending: descend in the SAME gear you'd climb it. Let engine braking
-//    hold your speed so you're not riding (and overheating) the brakes.
-//  • The steeper the hill, the lower the gear and the lower the safe speed.
+// The priority on this coach is AVOIDING OVERHEATING on climbs. The 455 is
+// geared tall (~2,375 rpm at 60 in top), so on a grade it lugs easily — and a
+// lugging big-block under sustained load is what cooks it (and spikes the trans
+// temp). The fix, which is also standard GMC-owner practice, is:
+//   • Climb: downshift to keep the engine in/above its torque peak (~2,400 rpm)
+//     so the water pump and fan spin fast enough to shed heat — owners happily
+//     run 3,500–4,500 rpm up long grades. Keeping revs UP matters more than
+//     keeping them low.
+//   • Climb: also ease off the throttle/speed as it steepens — less power
+//     demanded = less heat made. So on a steep hot grade you both slow down AND
+//     hold a lower gear.
+//   • Descend: let engine braking (a low gear) hold your speed instead of riding
+//     the brakes; keep revs below the sustain limit.
 //
-// These are conservative general guidelines, not factory specs — tune the
-// profile below to your coach. The advice is colored by urgency so the big
-// number turns amber/red when you should ease off or shift down.
+// "Hot mode" (warm-weather / heavy-load) shifts everything more conservative:
+// downshift sooner to keep revs higher, and back off speed more.
+//
+// These are general guidelines, not factory specs. The drivetrain numbers are
+// calibrated to owner-reported data (3.07 final drive, ~2,375 rpm @ 60 in top,
+// 370 lb-ft torque peak @ 2,400 rpm); tune the profile to your coach.
 
 import { clamp } from "./smoothing.js";
 
@@ -22,73 +32,107 @@ export const GMC_1976 = {
   engine: "Olds 455 V8",
   transmission: "TH425 3-speed auto",
   flatCruiseMph: 62, // comfortable all-day cruise (455 loafs here)
-  flatMaxMph: 68, // don't-exceed on the level — keep margin below tire/heat limits
-  minCruiseMph: 25, // floor for suggestions on steep grades
-  // Fastest road speed in each gear before the engine over-revs (a ~3,500 rpm
-  // sustained ceiling, well under the 455's redline). Derived from the TH425
-  // ratios (1st 2.48, 2nd 1.48, 3rd/DRIVE 1.00) assuming top gear turns
-  // ~2,600 rpm at 60 mph. DRIVE's real ceiling is the tire/flat limit, so it
-  // uses flatMaxMph. Adjust these if your final drive (3.07 vs 3.42) or tire
-  // size differs.
-  gearCeilingMph: { D: 68, "2": 55, "1": 33 },
+  flatMaxMph: 68, // don't-exceed on the level — margin below tire/heat limits
+
+  // Drivetrain, calibrated so top gear ≈ 2,375 rpm @ 60 mph (owner-reported).
+  finalDrive: 3.07,
+  tireRevsPerMile: 774, // effective; chosen to match the 2,375 rpm @ 60 figure
+  gearRatios: { D: 1.0, "2": 1.48, "1": 2.48 },
+
+  // Cooling-oriented climb window.
+  torquePeakRpm: 2400, // 370 lb-ft here — the heart of the pulling range
+  coolingClimbRpm: 2000, // keep climbing revs at/above this (no lugging, fan/pump moving)
+  hotWeatherRpmBump: 400, // Hot mode lifts the climb-rpm floor to ~the torque peak
+  maxSustainRpm: 4200, // don't hold above this (owners run 4–4.5k on long grades)
+
+  minCruiseMph: 25, // floor for speed suggestions on steep grades
   gearNames: { D: "DRIVE", "2": "2nd", "1": "LOW" },
 };
 
 const RANK = { D: 3, "2": 2, "1": 1 };
 const GEAR_BY_RANK = { 3: "D", 2: "2", 1: "1" };
+const CLIMB_COOL_GRADE = 4; // below this, heat isn't a concern — stay in DRIVE
+const DESCEND_BRAKE_GRADE = 4; // below this, no engine braking needed — stay in DRIVE
+
+// Engine rpm at a given road speed in a given gear, and the inverse.
+const rpmPerMph = (p, gear) => (p.tireRevsPerMile / 60) * p.finalDrive * p.gearRatios[gear];
+const rpmAt = (p, gear, mph) => rpmPerMph(p, gear) * mph;
+const speedAtRpm = (p, gear, rpm) => rpm / rpmPerMph(p, gear);
 
 /**
  * @param {number|null} gradePercent  +climb / -descend
  * @param {number|null} speedMph      current GPS speed, mph (null if unknown)
+ * @param {{hot?: boolean, profile?: object}} [opts]
  * @returns {{suggestedSpeedMph:number, maxSpeedMph:number, gear:string,
- *            gearLabel:string, level:"ok"|"caution"|"warn", message:string}}
+ *            gearLabel:string, estimatedRpm:number, level:"ok"|"caution"|"warn",
+ *            message:string}}
  */
-export function advise(gradePercent, speedMph, p = GMC_1976) {
+export function advise(gradePercent, speedMph, opts = {}) {
+  const { hot = false, profile: p = GMC_1976 } = opts;
   const grade = Number.isFinite(gradePercent) ? gradePercent : 0;
   const s = Number.isFinite(speedMph) ? speedMph : null;
   const up = grade > 0.5;
   const down = grade < -0.5;
   const mag = Math.abs(grade);
-  const moderate = mag >= 3;
   const steep = mag >= 6;
 
-  // --- Recommended gear + suggested/max speed -----------------------------
-  // Unifying rule: `max` is never high enough to over-rev the recommended gear,
-  // so following the advice can't hurt the engine.
-  //  • Climbing: hold the highest gear that isn't lugging at your actual speed;
-  //    `max` is that gear's no-over-rev ceiling, so you know the fastest you can
-  //    safely be in it (and never downshift above it).
-  //  • Descending: pick a conservative brake-fade-safe speed, then use the
-  //    lowest gear that won't over-rev at that speed for engine braking.
   let rank, suggested, max;
+
   if (up) {
-    // Only downshift on grades steep enough that DRIVE would lug; on gentle
-    // grades the 455 pulls top gear fine at any reasonable speed.
-    if (!moderate) rank = 3;
-    else if (s == null) rank = steep ? 1 : 2;
-    else if (s >= 42) rank = 3; // DRIVE pulls fine at highway speed (~1,800+ rpm)
-    else if (s >= 28) rank = 2; // hold 2nd through the mid-range, no lugging
-    else rank = 1; // crawling a steep grade — LOW
+    // Ease off as the hill steepens to cut the power demand (and heat); Hot mode
+    // backs off more.
+    const speedDrop = hot ? 4.5 : 3.5;
+    suggested = clamp(p.flatCruiseMph - speedDrop * grade, p.minCruiseMph, p.flatCruiseMph);
+
+    if (grade < CLIMB_COOL_GRADE) {
+      rank = 3; // gentle climb — DRIVE is fine, little heat at stake
+    } else {
+      // Keep revs at/above the cooling floor so the pump & fan move: hold the
+      // TALLEST gear that still clears the floor at our (current or target)
+      // speed. Hot mode raises the floor toward the torque peak.
+      const rpmFloor = p.coolingClimbRpm + (hot ? p.hotWeatherRpmBump : 0);
+      const atSpeed = s ?? suggested;
+      rank = 1;
+      for (const g of ["D", "2", "1"]) {
+        if (rpmAt(p, g, atSpeed) >= rpmFloor) {
+          rank = RANK[g];
+          break;
+        }
+      }
+    }
     const g = GEAR_BY_RANK[rank];
-    suggested = clamp(p.flatCruiseMph - 3.5 * grade, p.minCruiseMph, p.flatCruiseMph);
-    max = g === "D" ? p.flatMaxMph : p.gearCeilingMph[g];
+    // Fastest you should hold in this gear before revs/heat get excessive.
+    max = Math.min(p.flatMaxMph, speedAtRpm(p, g, p.maxSustainRpm));
+    max = Math.max(max, suggested);
   } else if (down) {
+    // Conservative, brake-fade-safe descent speeds (the thresholds you liked).
     suggested = clamp(p.flatCruiseMph - 3 * mag, p.minCruiseMph, p.flatCruiseMph);
     max = clamp(p.flatMaxMph - 3.2 * mag, p.minCruiseMph, p.flatMaxMph);
-    if (max <= p.gearCeilingMph["1"]) rank = 1;
-    else if (max <= p.gearCeilingMph["2"]) rank = 2;
-    else rank = 3;
+    if (mag < DESCEND_BRAKE_GRADE) {
+      rank = 3; // gentle descent — DRIVE is fine, brakes aren't at risk
+    } else {
+      // Lowest gear (most engine braking) that won't over-rev at the max speed.
+      rank = 3;
+      for (const g of ["1", "2", "D"]) {
+        if (rpmAt(p, g, max) <= p.maxSustainRpm) {
+          rank = RANK[g];
+          break;
+        }
+      }
+    }
   } else {
     rank = 3;
     suggested = p.flatCruiseMph;
     max = p.flatMaxMph;
   }
+
   const gear = GEAR_BY_RANK[rank];
   const gearLabel = p.gearNames[gear];
+  const estimatedRpm = Math.round(rpmAt(p, gear, s ?? suggested) / 10) * 10;
 
   // --- Status / urgency (drives the color) --------------------------------
-  // Red = slow down &/or shift down NOW. Amber = ease off or a downshift is
-  // advised. Green/neutral = all good.
+  // Red = act now (slow down &/or shift down). Amber = ease off, or a downshift
+  // to run cooler is advised. Neutral = all good.
   let level = "ok";
   let message = `OK in ${gearLabel}`;
 
@@ -96,21 +140,24 @@ export function advise(gradePercent, speedMph, p = GMC_1976) {
     level = "warn";
     message = down
       ? `Too fast for ${Math.round(mag)}% down — brake & hold ${gearLabel}`
-      : `Over safe speed — ease off`;
+      : `Ease off — over ${Math.round(max)} stresses the engine`;
   } else if (down && steep) {
-    const tooQuick = s != null && s > suggested;
-    level = tooQuick ? "warn" : "caution";
+    level = s != null && s > suggested ? "warn" : "caution";
     message = `Steep descent — engine-brake in ${gearLabel}`;
-  } else if (up && steep && s != null && s < 24) {
-    level = "warn";
-    message = `Lugging — drop to ${gearLabel}`;
-  } else if (s != null && s > suggested + 2) {
+  } else if (up && rank < 3) {
+    // A cooling downshift is advised. Hot + steep is the real overheat danger.
+    level = hot && steep ? "warn" : "caution";
+    const why = hot ? "to run cooler" : "keep revs up";
+    message = `${steep ? "Steep" : "Long"} climb — hold ${gearLabel}, ${why}`;
+  } else if (up && s != null && s > suggested + 2) {
     level = "caution";
-    message = down ? `Ease off — hold ${gearLabel}` : `Ease back toward ${Math.round(suggested)}`;
-  } else if (rank < 3) {
-    // A downshift out of DRIVE is recommended.
+    message = `Ease toward ${Math.round(suggested)} to run cooler`;
+  } else if (down && rank < 3) {
     level = "caution";
-    message = up && steep ? `Long climb — hold ${gearLabel}` : `Hold ${gearLabel}`;
+    message =
+      s != null && s > suggested + 2
+        ? `Ease off — hold ${gearLabel}`
+        : `Descent — hold ${gearLabel} to save brakes`;
   }
 
   return {
@@ -118,9 +165,10 @@ export function advise(gradePercent, speedMph, p = GMC_1976) {
     maxSpeedMph: Math.round(max),
     gear,
     gearLabel,
+    estimatedRpm,
     level,
     message,
   };
 }
 
-export { RANK };
+export { RANK, rpmAt, speedAtRpm };

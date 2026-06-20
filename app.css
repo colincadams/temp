@@ -200,10 +200,20 @@ body {
   color: var(--warn);
 }
 
+.rpm {
+  margin-top: 10px;
+  min-height: 1em;
+  font-size: clamp(13px, 3.6vw, 16px);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
 .confidence {
   width: min(220px, 60vw);
   height: 5px;
-  margin-top: 16px;
+  margin-top: 14px;
   border-radius: 999px;
   background: var(--bg-2);
   overflow: hidden;
@@ -235,6 +245,16 @@ body {
 }
 .ghost-btn:active {
   background: var(--bg-2);
+}
+.btn-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#hotToggle.hot-on {
+  border-color: var(--warn);
+  color: var(--warn);
+  background: rgba(255, 69, 58, 0.12);
 }
 .sources {
   list-style: none;

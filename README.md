@@ -31,19 +31,28 @@ barometer later just makes the same number better.
 
 Below the grade, three tiles show **suggested speed**, **max speed**, and the
 **gear** (selector position) for a 1976 GMC Motorhome — Olds 455 V8 with the
-TH425 3-speed automatic, so gear is `DRIVE`, `2`, or `LOW`. The guidance follows
-old-coach mountain-driving practice:
+TH425 3-speed automatic, so gear is `DRIVE`, `2`, or `LOW` — plus an estimated
+**rpm** readout so you can sanity-check against your tach.
 
-- **Climbing:** downshift as you slow so the engine stays in its torque band
-  instead of lugging; expect to give up speed on grades. Uphill, the **max** tile
-  shows the fastest you can safely run in the recommended gear *without
-  over-revving* (DRIVE ≈ tire/flat limit, 2nd ≈ 55, LOW ≈ 33) — so you never drop
-  a gear at too high a speed.
-- **Descending:** let engine braking hold your speed instead of riding the
-  brakes. The app picks the lowest gear that won't over-rev at a conservative,
-  brake-fade-safe speed (2nd on most grades, LOW on the steepest), and the
-  **max** tile is that safe speed. Net rule: following `max` never over-revs the
-  recommended gear.
+The climb logic is built around **avoiding overheating**, the 455's classic
+weak point. Because the coach is geared tall (~2,375 rpm at 60 in top), it lugs
+easily on grades, and a lugging big-block under load is what cooks it. So:
+
+- **Climbing:** the app **downshifts to keep the engine near/above its torque
+  peak (~2,400 rpm)** so the water pump and fan move enough air and coolant
+  (GMC owners run 3,500–4,500 rpm up long grades for exactly this), and it
+  **eases the suggested speed down** as the grade steepens to cut the power
+  demand. The **max** tile is the fastest you should hold in that gear before
+  revs/heat climb too far.
+- **Hot mode** (the `Hot` button — tap it in warm weather or when heavily
+  loaded): downshifts sooner to keep revs higher, lowers the suggested speed
+  more, and flags steep climbs red earlier.
+- **Descending:** engine-brake instead of riding the brakes — the app holds the
+  lowest gear that won't over-rev at a conservative, brake-fade-safe speed
+  (DRIVE on gentle grades, 2nd from ~6%, LOW on the steepest).
+
+Color reflects safety/heat status (neutral → amber when a cooling downshift or
+ease-off is advised → red when you should act now).
 
 The big number's **color reflects safety status, not just incline**:
 
@@ -53,9 +62,13 @@ The big number's **color reflects safety status, not just incline**:
 | **Amber** | Ease off, or a downshift out of DRIVE is advised |
 | **Red** (pulsing) | Slow down &/or shift down now — over the safe speed, or lugging on a climb |
 
-These are conservative general guidelines, not factory specs. Tune them to your
-coach by editing the `GMC_1976` profile in [`src/vehicle.js`](src/vehicle.js)
-(cruise/max speeds, gear names, thresholds).
+These are general guidelines, not factory specs. The drivetrain numbers are
+calibrated to owner-reported data (3.07 final drive, ~2,375 rpm @ 60 in top,
+370 lb-ft torque peak @ 2,400 rpm). Tune them to your coach by editing the
+`GMC_1976` profile in [`src/vehicle.js`](src/vehicle.js) — cruise/max speeds,
+final drive, tire revs/mile, gear ratios, and the cooling-rpm window. Watch the
+rpm readout against your tach on a climb and nudge `tireRevsPerMile` until they
+match.
 
 ## Run it on your iPhone
 

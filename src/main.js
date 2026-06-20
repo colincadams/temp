@@ -21,6 +21,8 @@ const els = {
   startBtn: $("startBtn"),
   stopBtn: $("stopBtn"),
   unitToggle: $("unitToggle"),
+  hotToggle: $("hotToggle"),
+  rpm: $("rpmReadout"),
   speed: $("speed"),
   gpsAcc: $("gpsAcc"),
   sourcePill: $("sourcePill"),
@@ -37,6 +39,7 @@ const els = {
 
 const state = {
   unit: localStorage.getItem("grade.unit") || "percent", // "percent" | "degrees"
+  hot: localStorage.getItem("grade.hot") === "1", // warm-weather conservatism
   running: false,
   lastUpdateTs: 0,
   wakeLock: null,
@@ -144,7 +147,7 @@ function render() {
 
   // --- Motorhome speed/gear advisor + safety-status coloring ---
   if (fresh && out.gradePercent != null) {
-    const a = advise(out.gradePercent, speedMph);
+    const a = advise(out.gradePercent, speedMph, { hot: state.hot });
     els.display.dataset.status = a.level;
     els.advice.dataset.status = a.level;
     els.statusMsg.textContent = a.message;
@@ -152,6 +155,7 @@ function render() {
     els.maxVal.textContent = a.maxSpeedMph;
     els.gearVal.textContent = a.gear;
     els.gearLbl.textContent = a.gearLabel;
+    els.rpm.textContent = `≈ ${a.estimatedRpm.toLocaleString()} rpm`;
   } else {
     els.display.dataset.status = "ok";
     els.advice.dataset.status = "ok";
@@ -160,6 +164,7 @@ function render() {
     els.maxVal.textContent = "--";
     els.gearVal.textContent = "--";
     els.gearLbl.textContent = "gear";
+    els.rpm.textContent = "";
   }
   const acc = loc.lastFix?.accuracy;
   els.gpsAcc.textContent = Number.isFinite(acc) && acc < 9999 ? `±${Math.round(acc)} m` : "no GPS";
@@ -186,6 +191,18 @@ function toggleUnit() {
   render();
 }
 
+function applyHotUi() {
+  els.hotToggle.textContent = state.hot ? "Hot: ON" : "Hot: off";
+  els.hotToggle.classList.toggle("hot-on", state.hot);
+}
+
+function toggleHot() {
+  state.hot = !state.hot;
+  localStorage.setItem("grade.hot", state.hot ? "1" : "0");
+  applyHotUi();
+  render();
+}
+
 function isSecureContext() {
   return window.isSecureContext || location.hostname === "localhost";
 }
@@ -195,7 +212,9 @@ function isSecureContext() {
 els.startBtn.addEventListener("click", start);
 els.stopBtn.addEventListener("click", stop);
 els.unitToggle.addEventListener("click", toggleUnit);
+els.hotToggle.addEventListener("click", toggleHot);
 els.unitToggle.textContent = state.unit === "percent" ? "Show °" : "Show %";
+applyHotUi();
 
 if (!isSecureContext()) {
   showBanner("Heads up: GPS needs HTTPS. Host this on GitHub Pages or open via localhost.", "warn");
