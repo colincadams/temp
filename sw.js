@@ -2,7 +2,7 @@
 // elevation API needs the network, but the GPS-altitude source keeps working
 // offline, so the app stays useful in a tunnel or dead zone.
 
-const CACHE = "highway-grade-v3";
+const CACHE = "highway-grade-v4";
 const SHELL = [
   "./",
   "./index.html",
@@ -40,24 +40,26 @@ self.addEventListener("activate", (e) => {
 
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
-  // Never cache the elevation API — always go to network.
+  // Never touch the elevation API — always straight to network.
   if (url.hostname.endsWith("open-meteo.com")) return;
-  if (e.request.method !== "GET") return;
+  if (e.request.method !== "GET" || url.origin !== location.origin) return;
 
-  // Cache-first for the app shell (same origin), falling back to network.
+  // Network-first for the app shell: you always get the latest code when
+  // online, and the cache is only a fallback so the app still launches offline
+  // (in a tunnel/dead zone). Each successful fetch refreshes the cache.
   e.respondWith(
-    caches.match(e.request).then(
-      (hit) =>
-        hit ||
-        fetch(e.request)
-          .then((res) => {
-            if (url.origin === location.origin && res.ok) {
-              const copy = res.clone();
-              caches.open(CACHE).then((c) => c.put(e.request, copy));
-            }
-            return res;
-          })
-          .catch(() => hit)
-    )
+    fetch(e.request)
+      .then((res) => {
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, copy));
+        }
+        return res;
+      })
+      .catch(() =>
+        caches
+          .match(e.request)
+          .then((hit) => hit || (e.request.mode === "navigate" ? caches.match("./index.html") : undefined))
+      )
   );
 });

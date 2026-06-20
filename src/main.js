@@ -221,5 +221,16 @@ if (!isSecureContext()) {
 }
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("./sw.js").catch(() => {});
+  // Auto-reload once when a new version takes over, so updates apply on a single
+  // refresh instead of needing a second one.
+  let reloading = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (reloading) return;
+    reloading = true;
+    location.reload();
+  });
+  navigator.serviceWorker.register("./sw.js").then((reg) => {
+    // Check for a newer service worker each time the app is opened.
+    reg.update().catch(() => {});
+  }).catch(() => {});
 }
