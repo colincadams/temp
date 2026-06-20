@@ -70,9 +70,12 @@ export function advise(gradePercent, speedMph, p = GMC_1976) {
     suggested = clamp(p.flatCruiseMph - 3.5 * grade, p.minCruiseMph, p.flatCruiseMph);
     max = p.flatMaxMph; // overspeed isn't the climbing risk — lugging is
   } else if (down) {
-    // Safety-limited: keep to a speed engine braking can hold in `gear`.
-    suggested = clamp(p.flatCruiseMph - 3 * mag, p.minCruiseMph, p.flatCruiseMph);
-    max = clamp(p.flatMaxMph - 3.2 * mag, p.minCruiseMph, p.flatMaxMph);
+    // Safety-limited and intentionally conservative on steep grades: keep to a
+    // speed engine braking can hold in `gear`, well clear of brake-fade
+    // territory. Steeper -> lower, bottoming out around a walking-the-coach-down
+    // crawl on the nastiest descents.
+    suggested = clamp(p.flatCruiseMph - 4 * mag, 20, p.flatCruiseMph);
+    max = clamp(p.flatMaxMph - 4 * mag, 24, p.flatMaxMph);
   } else {
     suggested = p.flatCruiseMph;
     max = p.flatMaxMph;
