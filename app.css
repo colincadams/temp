@@ -3,8 +3,9 @@
   --bg-2: #121821;
   --fg: #f4f7fb;
   --muted: #8a97a8;
-  --up: #ff5a4d; /* climbing */
-  --down: #34c759; /* descending */
+  --ok: #34c759; /* safe */
+  --caution: #ffb020; /* ease off / be ready to shift */
+  --warn: #ff453a; /* slow down & shift down now */
   --flat: #d6deea;
   --accent: #ffb020;
   --safe-top: env(safe-area-inset-top, 0px);
@@ -95,31 +96,44 @@ body {
   font-weight: 700;
 }
 .magnitude {
-  font-size: clamp(140px, 46vw, 360px);
+  font-size: clamp(110px, 36vw, 280px);
   font-weight: 800;
   letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums;
 }
 .unit {
-  font-size: clamp(44px, 13vw, 110px);
+  font-size: clamp(40px, 11vw, 96px);
   font-weight: 700;
   margin-left: 6px;
 }
 .caption {
-  margin-top: 8px;
-  font-size: clamp(13px, 3.6vw, 16px);
+  margin-top: 4px;
+  font-size: clamp(12px, 3.4vw, 15px);
   letter-spacing: 0.32em;
   text-transform: uppercase;
   color: var(--muted);
 }
 
-.display[data-direction="up"] .number,
-.display[data-direction="up"] .arrow {
-  color: var(--up);
+/* Color now reflects driving SAFETY status, not just incline direction. */
+.display[data-status="ok"] .number,
+.display[data-status="ok"] .arrow {
+  color: var(--flat);
 }
-.display[data-direction="down"] .number,
-.display[data-direction="down"] .arrow {
-  color: var(--down);
+.display[data-status="caution"] .number,
+.display[data-status="caution"] .arrow {
+  color: var(--caution);
+}
+.display[data-status="warn"] .number,
+.display[data-status="warn"] .arrow {
+  color: var(--warn);
+}
+.display[data-status="warn"] .number {
+  animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.55;
+  }
 }
 .display[data-direction="up"] .arrow {
   transform: translateY(-2px);
@@ -128,10 +142,68 @@ body {
   transform: translateY(2px);
 }
 
+/* Status message + advice tiles */
+.status-msg {
+  margin-top: 14px;
+  min-height: 1.2em;
+  font-size: clamp(15px, 4.4vw, 20px);
+  font-weight: 700;
+  text-align: center;
+  color: var(--muted);
+  padding: 0 12px;
+}
+.display[data-status="caution"] .status-msg {
+  color: var(--caution);
+}
+.display[data-status="warn"] .status-msg {
+  color: var(--warn);
+}
+
+.advice {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  width: min(440px, 92vw);
+}
+.tile {
+  flex: 1;
+  background: var(--bg-2);
+  border: 1px solid #1d2734;
+  border-radius: 14px;
+  padding: 10px 6px;
+  text-align: center;
+}
+.tile-val {
+  font-size: clamp(26px, 8vw, 40px);
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.tile-lbl {
+  margin-top: 5px;
+  font-size: clamp(10px, 2.8vw, 12px);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tile.gear .tile-val {
+  color: var(--accent);
+}
+/* Highlight the gear tile when a downshift is advised. */
+.advice[data-status="caution"] .tile.gear {
+  border-color: var(--caution);
+}
+.advice[data-status="warn"] .tile.gear {
+  border-color: var(--warn);
+}
+.advice[data-status="warn"] .tile.gear .tile-val {
+  color: var(--warn);
+}
+
 .confidence {
   width: min(220px, 60vw);
   height: 5px;
-  margin-top: 18px;
+  margin-top: 16px;
   border-radius: 999px;
   background: var(--bg-2);
   overflow: hidden;

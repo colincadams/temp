@@ -2,7 +2,7 @@
 // elevation API needs the network, but the GPS-altitude source keeps working
 // offline, so the app stays useful in a tunnel or dead zone.
 
-const CACHE = "highway-grade-v1";
+const CACHE = "highway-grade-v2";
 const SHELL = [
   "./",
   "./index.html",
@@ -13,6 +13,7 @@ const SHELL = [
   "./src/grade.js",
   "./src/smoothing.js",
   "./src/fusion.js",
+  "./src/vehicle.js",
   "./src/locationService.js",
   "./src/sources/gpsAltitudeSource.js",
   "./src/sources/elevationApiSource.js",

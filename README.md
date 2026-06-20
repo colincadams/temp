@@ -27,6 +27,30 @@ In a browser the **elevation map** does the heavy lifting and **GPS altitude**
 is the offline fallback. The fuser blends whatever is live, so adding the
 barometer later just makes the same number better.
 
+## Motorhome advisor (1976 GMC)
+
+Below the grade, three tiles show **suggested speed**, **max speed**, and the
+**gear** (selector position) for a 1976 GMC Motorhome — Olds 455 V8 with the
+TH425 3-speed automatic, so gear is `DRIVE`, `2`, or `LOW`. The guidance follows
+old-coach mountain-driving practice:
+
+- **Climbing:** downshift as you slow so the engine stays in its torque band
+  instead of lugging; expect to give up speed on grades.
+- **Descending:** descend in the same low gear you'd climb in and let engine
+  braking hold your speed, rather than riding the brakes down a long grade.
+
+The big number's **color reflects safety status, not just incline**:
+
+| Color | Meaning |
+| --- | --- |
+| Neutral | All good — hold your speed/gear |
+| **Amber** | Ease off, or a downshift out of DRIVE is advised |
+| **Red** (pulsing) | Slow down &/or shift down now — over the safe speed, or lugging on a climb |
+
+These are conservative general guidelines, not factory specs. Tune them to your
+coach by editing the `GMC_1976` profile in [`src/vehicle.js`](src/vehicle.js)
+(cruise/max speeds, gear names, thresholds).
+
 ## Run it on your iPhone
 
 GPS requires HTTPS, so host the static files somewhere with TLS. Easiest is

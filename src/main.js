@@ -8,6 +8,7 @@ import { GpsAltitudeSource } from "./sources/gpsAltitudeSource.js";
 import { ElevationApiSource } from "./sources/elevationApiSource.js";
 import { BarometerSource } from "./sources/barometerSource.js";
 import { formatGrade } from "./grade.js";
+import { advise } from "./vehicle.js";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -26,6 +27,12 @@ const els = {
   sources: $("sourceStatus"),
   banner: $("banner"),
   conf: $("confBar"),
+  statusMsg: $("statusMsg"),
+  advice: $("advice"),
+  suggestedVal: $("suggestedVal"),
+  maxVal: $("maxVal"),
+  gearVal: $("gearVal"),
+  gearLbl: $("gearLbl"),
 };
 
 const state = {
@@ -132,7 +139,28 @@ function render() {
 
   // Secondary readouts.
   const sp = loc.lastFix?.speed;
-  els.speed.textContent = Number.isFinite(sp) ? `${Math.round(sp * 2.23694)} mph` : "-- mph";
+  const speedMph = Number.isFinite(sp) ? sp * 2.23694 : null;
+  els.speed.textContent = speedMph != null ? `${Math.round(speedMph)} mph` : "-- mph";
+
+  // --- Motorhome speed/gear advisor + safety-status coloring ---
+  if (fresh && out.gradePercent != null) {
+    const a = advise(out.gradePercent, speedMph);
+    els.display.dataset.status = a.level;
+    els.advice.dataset.status = a.level;
+    els.statusMsg.textContent = a.message;
+    els.suggestedVal.textContent = a.suggestedSpeedMph;
+    els.maxVal.textContent = a.maxSpeedMph;
+    els.gearVal.textContent = a.gear;
+    els.gearLbl.textContent = a.gearLabel;
+  } else {
+    els.display.dataset.status = "ok";
+    els.advice.dataset.status = "ok";
+    els.statusMsg.textContent = state.running ? "Acquiring grade…" : "Tap start to begin";
+    els.suggestedVal.textContent = "--";
+    els.maxVal.textContent = "--";
+    els.gearVal.textContent = "--";
+    els.gearLbl.textContent = "gear";
+  }
   const acc = loc.lastFix?.accuracy;
   els.gpsAcc.textContent = Number.isFinite(acc) && acc < 9999 ? `±${Math.round(acc)} m` : "no GPS";
 

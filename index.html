@@ -27,7 +27,7 @@
         <div class="stat right"><span id="gpsAcc">no GPS</span></div>
       </header>
 
-      <section id="display" class="display" data-direction="flat">
+      <section id="display" class="display" data-direction="flat" data-status="ok">
         <div class="arrow" id="arrow">•</div>
         <div class="number">
           <span class="sign" id="sign"></span>
@@ -35,6 +35,24 @@
           <span class="unit" id="unitLabel">%</span>
         </div>
         <div class="caption">road grade</div>
+
+        <div id="statusMsg" class="status-msg">Tap start to begin</div>
+
+        <div class="advice" id="advice" data-status="ok">
+          <div class="tile">
+            <div class="tile-val" id="suggestedVal">--</div>
+            <div class="tile-lbl">suggested mph</div>
+          </div>
+          <div class="tile gear">
+            <div class="tile-val" id="gearVal">--</div>
+            <div class="tile-lbl" id="gearLbl">gear</div>
+          </div>
+          <div class="tile">
+            <div class="tile-val" id="maxVal">--</div>
+            <div class="tile-lbl">max mph</div>
+          </div>
+        </div>
+
         <div class="confidence"><div id="confBar" class="confidence-bar"></div></div>
       </section>
 
@@ -45,7 +63,8 @@
       </footer>
 
       <p class="disclaimer">
-        Estimate only. Mount your phone — don't hold or stare at it while driving.
+        Estimates &amp; general guidance for a 1976 GMC Motorhome — use your own
+        judgment. Mount your phone; don't hold or stare at it while driving.
       </p>
     </main>
 
@@ -54,9 +73,9 @@
         <div class="overlay-arrow">▲</div>
         <h1>Highway Grade</h1>
         <p>
-          Shows the slope of the road you're driving, as a big number. Uses your
-          location plus an elevation map; add a barometer in a native build for
-          higher accuracy.
+          Shows the slope of the road you're driving as a big number, plus the
+          suggested speed, max speed, and gear for a 1976 GMC Motorhome — turning
+          amber, then red, when you should ease off or shift down.
         </p>
         <button id="startBtn" class="start-btn">Start</button>
         <small>Allow location access when prompted. Best mounted in the car.</small>
