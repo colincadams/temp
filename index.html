@@ -58,28 +58,54 @@
       </section>
 
       <footer class="bottombar">
+        <button id="settingsBtn" class="ghost-btn">⚙ <span id="vehicleName">Vehicle</span></button>
         <button id="unitToggle" class="ghost-btn">Show °</button>
-        <ul id="sourceStatus" class="sources"></ul>
         <button id="stopBtn" class="ghost-btn">Stop</button>
       </footer>
 
-      <p class="disclaimer">
-        Estimates &amp; general guidance for a 1976 GMC Motorhome — use your own
-        judgment. Mount your phone; don't hold or stare at it while driving.
+      <p class="disclaimer" id="disclaimer">
+        Estimates &amp; general guidance — use your own judgment. Mount your
+        phone; don't hold or stare at it while driving.
       </p>
     </main>
 
     <div id="overlay" class="overlay">
+      <button id="overlaySettingsBtn" class="corner-btn" aria-label="Settings">⚙</button>
       <div class="overlay-card">
         <div class="overlay-arrow">▲</div>
         <h1>Highway Grade</h1>
         <p>
           Shows the slope of the road you're driving as a big number, plus the
-          suggested speed, max speed, and gear for a 1976 GMC Motorhome — turning
-          amber, then red, when you should ease off or shift down.
+          suggested speed, max speed, and gear for your motorhome — turning amber,
+          then red, when you should ease off or shift down.
         </p>
         <button id="startBtn" class="start-btn">Start</button>
-        <small>Allow location access when prompted. Best mounted in the car.</small>
+        <small id="overlayVehicle">Allow location access when prompted.</small>
+      </div>
+    </div>
+
+    <div id="settings" class="settings" hidden>
+      <div class="settings-card">
+        <div class="settings-head">
+          <h2>Settings</h2>
+          <button id="settingsClose" class="ghost-btn">Done</button>
+        </div>
+
+        <label class="field">
+          <span>Vehicle</span>
+          <select id="vehicleSelect"></select>
+        </label>
+        <p class="spec" id="vehicleSpec"></p>
+
+        <h3>Breakpoints</h3>
+        <p class="hint">
+          The thresholds the advisor uses for this vehicle. Tune them in
+          <code>src/vehicle.js</code>.
+        </p>
+        <div id="breakpoints" class="breakpoints"></div>
+
+        <h3>Signal sources</h3>
+        <ul id="sourceStatus" class="sources"></ul>
       </div>
     </div>
 

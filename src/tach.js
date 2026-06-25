@@ -13,7 +13,7 @@ const DEFAULTS = {
   max: 5000,
   start: 225, // degrees clockwise from top — lower-left (7:30)
   sweep: 270, // ...around to lower-right (4:30), 90° gap at the bottom
-  ticks: [0, 1000, 2000, 3000, 4000, 5000],
+  redline: 4200, // needle turns red at/above this
   torquePeak: 2400,
   zones: [
     { to: 2000, color: "#3b4a5a" }, // low / lugging
@@ -26,6 +26,8 @@ const DEFAULTS = {
 export function createTachometer(container, opts = {}) {
   const cfg = { ...DEFAULTS, ...opts };
   const { max, start, sweep } = cfg;
+  // Ticks every 1000 rpm up to the scale max, unless overridden.
+  const ticks = cfg.ticks || Array.from({ length: Math.floor(max / 1000) + 1 }, (_, i) => i * 1000);
   const CX = 100, CY = 100, R = 82, NEEDLE = 70;
 
   const angle = (v) => start + (Math.max(0, Math.min(max, v)) / max) * sweep;
@@ -70,7 +72,7 @@ export function createTachometer(container, opts = {}) {
   }
 
   // Ticks + labels (×1000).
-  for (const v of cfg.ticks) {
+  for (const v of ticks) {
     const a = angle(v);
     const o = pt(R - 10, a), i = pt(R - 18, a), lp = pt(R - 30, a);
     svg.appendChild(el("line", { x1: o.x, y1: o.y, x2: i.x, y2: i.y, stroke: "#5d6878", "stroke-width": "2" }));
@@ -115,7 +117,7 @@ export function createTachometer(container, opts = {}) {
       return;
     }
     needle.setAttribute("transform", `rotate(${angle(rpm)} ${CX} ${CY})`);
-    needle.setAttribute("stroke", rpm >= 4200 ? "#ff453a" : "#f4f7fb");
+    needle.setAttribute("stroke", rpm >= cfg.redline ? "#ff453a" : "#f4f7fb");
     rpmText.textContent = `${Math.round(rpm).toLocaleString()} rpm`;
     gearText.textContent = info.gear ?? "–";
     gearText.setAttribute("fill", info.color ?? "#f4f7fb");

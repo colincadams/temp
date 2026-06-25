@@ -8,7 +8,14 @@ import { GpsAltitudeSource } from "./sources/gpsAltitudeSource.js";
 import { ElevationApiSource } from "./sources/elevationApiSource.js";
 import { BarometerSource } from "./sources/barometerSource.js";
 import { formatGrade } from "./grade.js";
-import { advise } from "./vehicle.js";
+import {
+  advise,
+  VEHICLES,
+  getVehicle,
+  DEFAULT_VEHICLE_ID,
+  describeBreakpoints,
+  tachConfig,
+} from "./vehicle.js";
 import { createTachometer } from "./tach.js";
 
 const $ = (id) => document.getElementById(id);
@@ -32,17 +39,30 @@ const els = {
   advice: $("advice"),
   suggestedVal: $("suggestedVal"),
   maxVal: $("maxVal"),
+  // Settings
+  settings: $("settings"),
+  settingsBtn: $("settingsBtn"),
+  overlaySettingsBtn: $("overlaySettingsBtn"),
+  settingsClose: $("settingsClose"),
+  vehicleSelect: $("vehicleSelect"),
+  vehicleSpec: $("vehicleSpec"),
+  vehicleName: $("vehicleName"),
+  overlayVehicle: $("overlayVehicle"),
+  breakpoints: $("breakpoints"),
 };
 
 const STATUS_COLOR = { ok: "#f4f7fb", caution: "#ffb020", warn: "#ff453a" };
-const tach = createTachometer($("tach"), { torquePeak: 2400 });
 
 const state = {
   unit: localStorage.getItem("grade.unit") || "percent", // "percent" | "degrees"
+  vehicleId: localStorage.getItem("grade.vehicle") || DEFAULT_VEHICLE_ID,
   running: false,
   lastUpdateTs: 0,
   wakeLock: null,
 };
+
+let profile = getVehicle(state.vehicleId);
+let tach = createTachometer($("tach"), tachConfig(profile));
 
 const loc = new LocationService();
 const fuser = new FusedGradeEstimator();
@@ -146,7 +166,7 @@ function render() {
 
   // --- Motorhome speed/gear advisor + safety-status coloring ---
   if (fresh && out.gradePercent != null) {
-    const a = advise(out.gradePercent, speedMph);
+    const a = advise(out.gradePercent, speedMph, { profile });
     els.display.dataset.status = a.level;
     els.advice.dataset.status = a.level;
     els.statusMsg.textContent = a.message;
@@ -190,12 +210,80 @@ function isSecureContext() {
   return window.isSecureContext || location.hostname === "localhost";
 }
 
+// ---- Vehicle + settings ---------------------------------------------------
+
+function applyVehicle(id) {
+  state.vehicleId = id;
+  localStorage.setItem("grade.vehicle", id);
+  profile = getVehicle(id);
+  // Rebuild the tach for this vehicle's redline / zones / scale.
+  tach = createTachometer($("tach"), tachConfig(profile));
+  els.vehicleName.textContent = profile.name.split(" (")[0];
+  els.overlayVehicle.textContent = `${profile.name} · tap ⚙ to change`;
+  renderBreakpoints();
+  render();
+}
+
+function renderBreakpoints() {
+  const b = describeBreakpoints(profile);
+  els.vehicleSpec.textContent = `${b.engine} · ${b.transmission} · ${b.finalDrive}:1 axle`;
+
+  const rows = b.gears
+    .map(
+      (g) => `<tr>
+        <td>${g.label}</td>
+        <td>${g.ratio.toFixed(2)}</td>
+        <td>${g.rpmAt60.toLocaleString()}</td>
+        <td>${g.climbBelowMph ? "&lt; " + g.climbBelowMph : "cruise"}</td>
+        <td>${g.ceilingMph}</td>
+      </tr>`
+    )
+    .join("");
+
+  els.breakpoints.innerHTML = `
+    <dl class="bp-list">
+      <div><dt>Cruise / max (flat)</dt><dd>${b.flatCruiseMph} / ${b.flatMaxMph} mph</dd></div>
+      <div><dt>Downshift to climb at</dt><dd>≥ ${b.climbCoolGrade}% grade</dd></div>
+      <div><dt>Engine-brake descents at</dt><dd>≥ ${b.descendBrakeGrade}% grade</dd></div>
+      <div><dt>Climb rpm floor</dt><dd>${b.climbRpmFloor.toLocaleString()} rpm</dd></div>
+      <div><dt>Torque peak</dt><dd>${b.torquePeakRpm.toLocaleString()} rpm</dd></div>
+      <div><dt>Max sustained rpm</dt><dd>${b.maxSustainRpm.toLocaleString()} rpm</dd></div>
+      <div><dt>Redline (gauge)</dt><dd>${b.redlineRpm.toLocaleString()} rpm</dd></div>
+    </dl>
+    <table class="bp-table">
+      <thead><tr><th>Gear</th><th>Ratio</th><th>rpm@60</th><th>Climb</th><th>Max</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <p class="hint">“Climb” = hold this gear below that speed on a grade. “Max” = fastest in this gear without over-revving.</p>`;
+}
+
+function openSettings() {
+  els.settings.hidden = false;
+}
+function closeSettings() {
+  els.settings.hidden = true;
+}
+
+function initSettings() {
+  els.vehicleSelect.innerHTML = VEHICLES.map(
+    (v) => `<option value="${v.id}">${v.name}</option>`
+  ).join("");
+  els.vehicleSelect.value = state.vehicleId;
+  els.vehicleSelect.addEventListener("change", (e) => applyVehicle(e.target.value));
+  els.settingsBtn.addEventListener("click", openSettings);
+  els.overlaySettingsBtn.addEventListener("click", openSettings);
+  els.settingsClose.addEventListener("click", closeSettings);
+}
+
 // ---- Boot -----------------------------------------------------------------
 
 els.startBtn.addEventListener("click", start);
 els.stopBtn.addEventListener("click", stop);
 els.unitToggle.addEventListener("click", toggleUnit);
 els.unitToggle.textContent = state.unit === "percent" ? "Show °" : "Show %";
+
+initSettings();
+applyVehicle(state.vehicleId);
 
 if (!isSecureContext()) {
   showBanner("Heads up: GPS needs HTTPS. Host this on GitHub Pages or open via localhost.", "warn");

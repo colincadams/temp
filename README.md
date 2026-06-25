@@ -27,28 +27,38 @@ In a browser the **elevation map** does the heavy lifting and **GPS altitude**
 is the offline fallback. The fuser blends whatever is live, so adding the
 barometer later just makes the same number better.
 
-## Motorhome advisor (1976 GMC)
+## Motorhome advisor
 
-Below the grade, an **estimated tachometer** (SVG arc gauge with colored zones
-and a torque-peak marker) shows the engine rpm computed from your road speed and
-the recommended gear, with the **gear** (`DRIVE`/`2`/`LOW` on the TH425) in its
-center. Flanking tiles show **suggested speed** and **max speed**.
+Pick your coach from the **vehicle selector** (the ⚙ button, on the start
+screen or the bottom bar). Two profiles ship today:
 
-The climb logic is built around **avoiding overheating**, the 455's classic
-weak point. Because the coach is geared tall (~2,375 rpm at 60 in top), it lugs
-easily on grades, and a lugging big-block under load is what cooks it. This
-behavior is **always on** — there's no "hot mode" to remember, it just always
-drives like it's hot:
+| Vehicle | Drivetrain | Notes |
+| --- | --- | --- |
+| **1976 GMC Motorhome** | Olds 455 V8 · TH425 3-speed (`DRIVE`/`2`/`LOW`) | Lazy torque peak (~2,400 rpm); geared tall. |
+| **Ford F-53 V10** (2000 Pace Arrow & similar) | Triton 6.8L V10 · 4R100 4-speed w/ overdrive (`OD`/`D`/`2`/`1`) | Models the shared F-53 chassis; the V10 wants revs (peak ~3,250). |
 
-- **Climbing:** the app **downshifts to keep the engine at/above its torque
-  peak (~2,400 rpm)** so the water pump and fan move enough air and coolant
-  (GMC owners run 3,500–4,500 rpm up long grades for exactly this), and it
-  **eases the suggested speed down generously** as the grade steepens to cut the
-  power demand. The **max** tile is the fastest you should hold in that gear
-  before revs/heat climb too far.
+Below the grade, an **estimated tachometer** (SVG arc gauge with colored zones,
+torque-peak marker, and a per-vehicle redline) shows the engine rpm computed
+from your road speed and the recommended gear, with the **gear** in its center.
+Flanking tiles show **suggested speed**, **your speed**, and **max speed**.
+
+The climb logic is built around **avoiding overheating**. These coaches are
+geared tall, so on a grade they lug easily, and a lugging engine under load is
+what cooks it. It always drives conservatively (no "hot mode" to remember):
+
+- **Climbing:** **downshift to keep revs up** so the water pump and fan shed
+  heat (owners run these high up long grades), and **ease the speed down
+  generously** as the grade steepens to cut power demand. The rpm floor scales
+  with the grade, so mild grades hold a tall gear and steep grades rev higher.
+  The **max** tile is the fastest you should hold in that gear before
+  over-revving.
 - **Descending:** engine-brake instead of riding the brakes — the app holds the
-  lowest gear that won't over-rev at a conservative, brake-fade-safe speed
-  (DRIVE on gentle grades, 2nd from ~6%, LOW on the steepest).
+  lowest gear that won't over-rev at a conservative, brake-fade-safe speed.
+
+**Settings** (⚙) shows the active vehicle's **breakpoints** — flat cruise/max,
+the climb/descent grade thresholds, the rpm floor / torque peak / sustain /
+redline, and a per-gear table (ratio, rpm @ 60, the climb downshift speed, and
+each gear's no-over-rev ceiling) — plus the live signal-source status.
 
 Color (the grade number, the gear, the tiles) reflects safety/heat status:
 neutral → amber when a cooling downshift or ease-off is advised → red when you
@@ -63,12 +73,11 @@ The big number's **color reflects safety status, not just incline**:
 | **Red** (pulsing) | Slow down &/or shift down now — over the safe speed, or lugging on a climb |
 
 These are general guidelines, not factory specs. The drivetrain numbers are
-calibrated to owner-reported data (3.07 final drive, ~2,375 rpm @ 60 in top,
-370 lb-ft torque peak @ 2,400 rpm). Tune them to your coach by editing the
-`GMC_1976` profile in [`src/vehicle.js`](src/vehicle.js) — cruise/max speeds,
+calibrated to owner-reported data. Tune any vehicle (or add your own) by editing
+the `VEHICLES` array in [`src/vehicle.js`](src/vehicle.js) — cruise/max speeds,
 final drive, tire revs/mile, gear ratios, and the cooling-rpm window. Watch the
-rpm readout against your tach on a climb and nudge `tireRevsPerMile` until they
-match.
+on-screen tach against your real tach on a climb and nudge `tireRevsPerMile`
+until they match.
 
 ## Run it on your iPhone
 
