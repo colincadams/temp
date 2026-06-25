@@ -1,25 +1,24 @@
 // Driving advisor for big, old/heavy motorhomes. The priority is protecting the
 // drivetrain — above all, AVOIDING OVERHEATING on climbs — rather than making
-// time. The logic is generic over a vehicle "profile" (see VEHICLES); each
-// profile describes its drivetrain and a few tuning breakpoints.
+// time. The logic is generic over a vehicle "profile" (see VEHICLES).
 //
-// Shared principles, applied to whatever gears a profile has:
-//   • Climb: drop out of the tall top gear(s) so the engine keeps revs up near
-//     its working range instead of lugging — a lugging engine under sustained
-//     load is what overheats. Also ease off the speed as the grade steepens
-//     (less power demanded = less heat).
-//   • Descend: let engine braking (a lower gear) hold a conservative,
-//     brake-fade-safe speed instead of riding the brakes — without over-revving.
-//   • `max` is never high enough to over-rev the recommended gear.
+// Climb strategy is a simple, truck-style STEP TABLE (`climbSteps`): for each
+// band of grade, hold a specific gear and ease to a specific steady speed. This
+// matches how people actually drive grades and is easy to reason about. The
+// target speeds are chosen to sit the engine near its torque peak in that gear
+// (revs up enough to keep the belt-driven water pump & fan moving and avoid
+// lugging, but not screaming) — which is the anti-overheat sweet spot.
 //
-// Drivetrain numbers are calibrated to owner-reported data; tune any profile to
-// your specific coach (axle ratio, tire size, the rpm/grade breakpoints).
+// Descents use engine braking: the lowest gear that won't over-rev at a
+// conservative, brake-fade-safe speed.
+//
+// Numbers are calibrated to owner-reported data; tune any profile to your coach.
 
 import { clamp } from "./smoothing.js";
 
-// Each profile's `gears` are ordered TALLEST → LOWEST. gears[0] is the cruise /
-// top gear (overdrive if present). `ratio` is the transmission ratio for that
-// selector position's top gear.
+// `gears` are ordered TALLEST → LOWEST. gears[0] is the cruise / top gear.
+// `climbSteps` are ordered gentlest → steepest; the first whose `upToGrade` is
+// >= the current grade wins. `speed` is the steady target mph for that band.
 export const VEHICLES = [
   {
     id: "gmc-1976",
@@ -36,13 +35,14 @@ export const VEHICLES = [
     flatCruiseMph: 62,
     flatMaxMph: 68,
     minCruiseMph: 25,
-    climbSpeedDrop: 4.5, // mph of suggested-speed backoff per % climb
+    climbSteps: [
+      { upToGrade: 3, gear: "D", speed: 62 }, // 0–3%: hold DRIVE at cruise
+      { upToGrade: 7, gear: "2", speed: 40 }, // 3–7%: 2nd, ease to ~40 (~2,350 rpm)
+      { upToGrade: 99, gear: "1", speed: 25 }, // 7%+: LOW, ease to ~25 (~2,450 rpm)
+    ],
     descendSpeedDrop: 3.0,
     descendMaxDrop: 3.2,
-    climbCoolGrade: 4, // start dropping gears for cooling at/above this % climb
     descendBrakeGrade: 4, // start engine-braking at/above this % descent
-    climbRpmFloor: 2400, // keep climbing revs at/above this (no lugging; pump/fan up)
-    climbRpmPerGrade: 0, // extra rpm floor per % of grade beyond climbCoolGrade
     torquePeakRpm: 2400, // 370 lb-ft here
     maxSustainRpm: 4200, // don't hold above this (owners run 4–4.5k on long grades)
     redlineRpm: 4800,
@@ -64,13 +64,15 @@ export const VEHICLES = [
     flatCruiseMph: 63,
     flatMaxMph: 70,
     minCruiseMph: 28,
-    climbSpeedDrop: 4.0,
+    climbSteps: [
+      { upToGrade: 2, gear: "OD", speed: 63 }, // 0–2%: hold overdrive at cruise
+      { upToGrade: 4, gear: "D", speed: 55 }, // 2–4%: out of OD into 3rd (~2,450 rpm)
+      { upToGrade: 7, gear: "2", speed: 45 }, // 4–7%: 2nd, ease to ~45 (~3,070 rpm)
+      { upToGrade: 99, gear: "1", speed: 28 }, // 7%+: LOW, ease to ~28 (~3,380 rpm)
+    ],
     descendSpeedDrop: 3.0,
     descendMaxDrop: 3.2,
-    climbCoolGrade: 3, // the V10 rule: get out of overdrive early on grades
     descendBrakeGrade: 4,
-    climbRpmFloor: 2000, // base floor; mild grades stay in a tall gear...
-    climbRpmPerGrade: 180, // ...steeper grades demand more revs (V10 likes to spin)
     torquePeakRpm: 3250, // 425 lb-ft here
     maxSustainRpm: 4500,
     redlineRpm: 5000,
@@ -85,6 +87,7 @@ export const getVehicle = (id) => VEHICLES.find((v) => v.id === id) || VEHICLES[
 const rpmPerMph = (p, gear) => (p.tireRevsPerMile / 60) * p.finalDrive * gear.ratio;
 const rpmAt = (p, gear, mph) => rpmPerMph(p, gear) * mph;
 const speedAtRpm = (p, gear, rpm) => rpm / rpmPerMph(p, gear);
+const gearById = (p, id) => p.gears.find((g) => g.id === id) || p.gears[0];
 
 /**
  * @param {number|null} gradePercent  +climb / -descend
@@ -95,7 +98,6 @@ export function advise(gradePercent, speedMph, opts = {}) {
   const p = opts.profile || VEHICLES[0];
   const gears = p.gears;
   const top = gears[0];
-  const lowest = gears[gears.length - 1];
 
   const grade = Number.isFinite(gradePercent) ? gradePercent : 0;
   const s = Number.isFinite(speedMph) ? speedMph : null;
@@ -107,28 +109,11 @@ export function advise(gradePercent, speedMph, opts = {}) {
   let gear, suggested, max;
 
   if (up) {
-    // Ease off as the hill steepens to cut power demand (and heat). These coaches
-    // aren't driven for speed, so we back off generously.
-    suggested = clamp(p.flatCruiseMph - p.climbSpeedDrop * grade, p.minCruiseMph, p.flatCruiseMph);
-
-    if (grade < p.climbCoolGrade) {
-      gear = top; // gentle climb — top gear is fine, little heat at stake
-    } else {
-      // Keep revs at/above the floor so the engine isn't lugging and the pump &
-      // fan move: hold the TALLEST gear that still clears the floor at our
-      // (current or target) speed. The floor rises with the grade so steeper
-      // climbs hold proportionally higher revs.
-      const floor = p.climbRpmFloor + (p.climbRpmPerGrade || 0) * Math.max(0, grade - p.climbCoolGrade);
-      const atSpeed = s ?? suggested;
-      gear = lowest;
-      for (const g of gears) {
-        if (rpmAt(p, g, atSpeed) >= floor) {
-          gear = g;
-          break;
-        }
-      }
-    }
-    // Fastest you should hold in this gear before revs/heat get excessive.
+    // Step table: pick the band for this grade -> gear + steady target speed.
+    const step = p.climbSteps.find((st) => grade <= st.upToGrade) || p.climbSteps[p.climbSteps.length - 1];
+    gear = gearById(p, step.gear);
+    suggested = step.speed;
+    // Max = fastest you can hold this gear before over-revving.
     max = Math.min(p.flatMaxMph, speedAtRpm(p, gear, p.maxSustainRpm));
     max = Math.max(max, suggested);
   } else if (down) {
@@ -169,10 +154,10 @@ export function advise(gradePercent, speedMph, opts = {}) {
     message = `Steep descent — engine-brake in ${gear.label}`;
   } else if (up && isDownshift) {
     level = "caution";
-    message = `${steep ? "Steep" : "Long"} climb — hold ${gear.label}, keep revs up`;
+    message = `${steep ? "Steep" : "Long"} climb — hold ${gear.label}, ease to ${suggested}`;
   } else if (up && s != null && s > suggested + 2) {
     level = "caution";
-    message = `Ease toward ${Math.round(suggested)} to run cooler`;
+    message = `Ease toward ${suggested} to run cooler`;
   } else if (down && isDownshift) {
     level = "caution";
     message =
@@ -180,6 +165,9 @@ export function advise(gradePercent, speedMph, opts = {}) {
         ? `Ease off — hold ${gear.label}`
         : `Descent — hold ${gear.label} to save brakes`;
   }
+
+  // Heat nudge on sustained climbs (we can't read coolant temp, so prompt).
+  const hint = up && isDownshift ? "Sustained climb — ease off further if the temp gauge climbs." : null;
 
   return {
     suggestedSpeedMph: Math.round(suggested),
@@ -189,27 +177,32 @@ export function advise(gradePercent, speedMph, opts = {}) {
     estimatedRpm,
     level,
     message,
+    hint,
   };
 }
 
 /**
- * Structured view of a profile's breakpoints, for the settings screen.
+ * Structured view of a profile's rules, for the settings screen.
  */
 export function describeBreakpoints(p) {
-  const gears = p.gears.map((g, i) => {
-    const taller = i > 0 ? p.gears[i - 1] : null;
-    // On a climb you'd be in this gear once the next-taller gear drops below the
-    // rpm floor — i.e. below this road speed.
-    const climbBelowMph = taller ? Math.round(p.climbRpmFloor / rpmPerMph(p, taller)) : null;
-    const ceilingMph = Math.round(Math.min(p.flatMaxMph, p.maxSustainRpm / rpmPerMph(p, g)));
+  let from = 0;
+  const climb = p.climbSteps.map((st) => {
+    const g = gearById(p, st.gear);
+    const band = st.upToGrade >= 99 ? `${from}%+` : `${from}–${st.upToGrade}%`;
+    from = st.upToGrade;
     return {
-      label: g.label,
-      ratio: g.ratio,
-      rpmAt60: Math.round(rpmPerMph(p, g) * 60),
-      climbBelowMph,
-      ceilingMph,
+      band,
+      gearLabel: g.label,
+      speed: st.speed,
+      rpm: Math.round(rpmAt(p, g, st.speed) / 10) * 10,
     };
   });
+  const gears = p.gears.map((g) => ({
+    label: g.label,
+    ratio: g.ratio,
+    rpmAt60: Math.round(rpmPerMph(p, g) * 60),
+    ceilingMph: Math.round(Math.min(p.flatMaxMph, p.maxSustainRpm / rpmPerMph(p, g))),
+  }));
   return {
     name: p.name,
     engine: p.engine,
@@ -217,12 +210,11 @@ export function describeBreakpoints(p) {
     finalDrive: p.finalDrive,
     flatCruiseMph: p.flatCruiseMph,
     flatMaxMph: p.flatMaxMph,
-    climbCoolGrade: p.climbCoolGrade,
     descendBrakeGrade: p.descendBrakeGrade,
-    climbRpmFloor: p.climbRpmFloor,
     torquePeakRpm: p.torquePeakRpm,
     maxSustainRpm: p.maxSustainRpm,
     redlineRpm: p.redlineRpm,
+    climb,
     gears,
   };
 }

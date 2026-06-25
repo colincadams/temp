@@ -214,6 +214,18 @@ body {
   display: block;
 }
 
+.climb-hint {
+  margin-top: 12px;
+  max-width: 340px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--caution);
+  text-align: center;
+}
+.climb-hint[hidden] {
+  display: none;
+}
+
 .confidence {
   width: min(220px, 60vw);
   height: 5px;

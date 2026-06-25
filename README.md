@@ -42,23 +42,30 @@ torque-peak marker, and a per-vehicle redline) shows the engine rpm computed
 from your road speed and the recommended gear, with the **gear** in its center.
 Flanking tiles show **suggested speed**, **your speed**, and **max speed**.
 
-The climb logic is built around **avoiding overheating**. These coaches are
-geared tall, so on a grade they lug easily, and a lugging engine under load is
-what cooks it. It always drives conservatively (no "hot mode" to remember):
+The climb logic is built around **avoiding overheating**, using a simple,
+truck-style **step table** (grade band → gear → steady target speed). The target
+speeds put the engine near its torque peak in each gear — revs up enough to keep
+the belt-driven water pump and fan moving and avoid lugging (what cooks these
+engines), without screaming it. For the GMC:
 
-- **Climbing:** **downshift to keep revs up** so the water pump and fan shed
-  heat (owners run these high up long grades), and **ease the speed down
-  generously** as the grade steepens to cut power demand. The rpm floor scales
-  with the grade, so mild grades hold a tall gear and steep grades rev higher.
-  The **max** tile is the fastest you should hold in that gear before
-  over-revving.
+| Grade | Gear | Ease to | ≈ rpm |
+| --- | --- | --- | --- |
+| 0–3% | DRIVE | cruise (62) | ~2,460 |
+| 3–7% | 2nd | ~40 mph | ~2,340 |
+| 7%+ | LOW | ~25 mph | ~2,460 |
+
+(The Ford V10 has its own 4-band table using overdrive.) On sustained climbs a
+**heat nudge** reminds you to ease off further if the temp gauge climbs — since
+the phone can't read coolant temperature.
+
 - **Descending:** engine-brake instead of riding the brakes — the app holds the
   lowest gear that won't over-rev at a conservative, brake-fade-safe speed.
 
-**Settings** (⚙) shows the active vehicle's **breakpoints** — flat cruise/max,
-the climb/descent grade thresholds, the rpm floor / torque peak / sustain /
-redline, and a per-gear table (ratio, rpm @ 60, the climb downshift speed, and
-each gear's no-over-rev ceiling) — plus the live signal-source status.
+**Settings** (⚙) shows the active vehicle's **rules** — the climb step table
+(grade band → gear → target speed → rpm), flat cruise/max, the engine-brake
+grade, the torque-peak / max-sustain / redline rpm, and a per-gear reference
+table (ratio, rpm @ 60, no-over-rev ceiling) — plus the live signal-source
+status.
 
 Color (the grade number, the gear, the tiles) reflects safety/heat status:
 neutral → amber when a cooling downshift or ease-off is advised → red when you
@@ -75,7 +82,7 @@ The big number's **color reflects safety status, not just incline**:
 These are general guidelines, not factory specs. The drivetrain numbers are
 calibrated to owner-reported data. Tune any vehicle (or add your own) by editing
 the `VEHICLES` array in [`src/vehicle.js`](src/vehicle.js) — cruise/max speeds,
-final drive, tire revs/mile, gear ratios, and the cooling-rpm window. Watch the
+final drive, tire revs/mile, gear ratios, and the `climbSteps` table. Watch the
 on-screen tach against your real tach on a climb and nudge `tireRevsPerMile`
 until they match.
 

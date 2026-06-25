@@ -39,6 +39,7 @@ const els = {
   advice: $("advice"),
   suggestedVal: $("suggestedVal"),
   maxVal: $("maxVal"),
+  climbHint: $("climbHint"),
   // Settings
   settings: $("settings"),
   settingsBtn: $("settingsBtn"),
@@ -173,6 +174,8 @@ function render() {
     els.suggestedVal.textContent = a.suggestedSpeedMph;
     els.maxVal.textContent = a.maxSpeedMph;
     tach.update(a.estimatedRpm, { gear: a.gear, color: STATUS_COLOR[a.level] });
+    els.climbHint.textContent = a.hint || "";
+    els.climbHint.hidden = !a.hint;
   } else {
     els.display.dataset.status = "ok";
     els.advice.dataset.status = "ok";
@@ -180,6 +183,7 @@ function render() {
     els.suggestedVal.textContent = "--";
     els.maxVal.textContent = "--";
     tach.update(NaN);
+    els.climbHint.hidden = true;
   }
   const acc = loc.lastFix?.accuracy;
   els.gpsAcc.textContent = Number.isFinite(acc) && acc < 9999 ? `±${Math.round(acc)} m` : "no GPS";
@@ -228,33 +232,45 @@ function renderBreakpoints() {
   const b = describeBreakpoints(profile);
   els.vehicleSpec.textContent = `${b.engine} · ${b.transmission} · ${b.finalDrive}:1 axle`;
 
-  const rows = b.gears
+  const climbRows = b.climb
+    .map(
+      (c) => `<tr>
+        <td>${c.band}</td>
+        <td>${c.gearLabel}</td>
+        <td>${c.speed} mph</td>
+        <td>~${c.rpm.toLocaleString()}</td>
+      </tr>`
+    )
+    .join("");
+
+  const gearRows = b.gears
     .map(
       (g) => `<tr>
         <td>${g.label}</td>
         <td>${g.ratio.toFixed(2)}</td>
         <td>${g.rpmAt60.toLocaleString()}</td>
-        <td>${g.climbBelowMph ? "&lt; " + g.climbBelowMph : "cruise"}</td>
         <td>${g.ceilingMph}</td>
       </tr>`
     )
     .join("");
 
   els.breakpoints.innerHTML = `
+    <p class="hint">Climb plan — hold this gear and ease to this speed for each grade:</p>
+    <table class="bp-table">
+      <thead><tr><th>Grade</th><th>Gear</th><th>Target</th><th>rpm</th></tr></thead>
+      <tbody>${climbRows}</tbody>
+    </table>
     <dl class="bp-list">
       <div><dt>Cruise / max (flat)</dt><dd>${b.flatCruiseMph} / ${b.flatMaxMph} mph</dd></div>
-      <div><dt>Downshift to climb at</dt><dd>≥ ${b.climbCoolGrade}% grade</dd></div>
       <div><dt>Engine-brake descents at</dt><dd>≥ ${b.descendBrakeGrade}% grade</dd></div>
-      <div><dt>Climb rpm floor</dt><dd>${b.climbRpmFloor.toLocaleString()} rpm</dd></div>
       <div><dt>Torque peak</dt><dd>${b.torquePeakRpm.toLocaleString()} rpm</dd></div>
       <div><dt>Max sustained rpm</dt><dd>${b.maxSustainRpm.toLocaleString()} rpm</dd></div>
-      <div><dt>Redline (gauge)</dt><dd>${b.redlineRpm.toLocaleString()} rpm</dd></div>
     </dl>
     <table class="bp-table">
-      <thead><tr><th>Gear</th><th>Ratio</th><th>rpm@60</th><th>Climb</th><th>Max</th></tr></thead>
-      <tbody>${rows}</tbody>
+      <thead><tr><th>Gear</th><th>Ratio</th><th>rpm@60</th><th>Max</th></tr></thead>
+      <tbody>${gearRows}</tbody>
     </table>
-    <p class="hint">“Climb” = hold this gear below that speed on a grade. “Max” = fastest in this gear without over-revving.</p>`;
+    <p class="hint">“Max” = fastest in that gear without over-revving (the climb targets are well under it for cooling).</p>`;
 }
 
 function openSettings() {
