@@ -1,14 +1,11 @@
 // Grade unit conversions and formatting. A "grade" of 5% means 5 m of rise per
 // 100 m of horizontal travel.
 
-import { toDeg, toRad } from "./geo.js";
+import { toDeg } from "./geo.js";
 import { clamp } from "./smoothing.js";
 
 /** percent grade (rise/run * 100) -> angle in degrees */
 export const percentToDegrees = (pct) => toDeg(Math.atan(pct / 100));
-
-/** angle in degrees -> percent grade */
-export const degreesToPercent = (deg) => Math.tan(toRad(deg)) * 100;
 
 /**
  * Highways essentially never exceed ~10–12% sustained; clamp to a sane band so a
