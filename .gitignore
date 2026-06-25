@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Generated web bundle (assembled from repo root by scripts/build-web.mjs)
+/www/
+
+# Generated native projects (recreated with `npx cap add ios`).
+# Anchored to the repo root so the committed native/ios/ plugin is NOT ignored.
+/ios/
+/android/
+
+# Misc
+.DS_Store
+*.log

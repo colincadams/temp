@@ -1,0 +1,8 @@
+{
+  "appId": "com.example.highwaygrade",
+  "appName": "Highway Grade",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "always"
+  }
+}

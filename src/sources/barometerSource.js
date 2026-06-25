@@ -24,7 +24,7 @@ import { linearSlope, clamp } from "../smoothing.js";
 import { plausibleGrade } from "../grade.js";
 
 const WINDOW_METERS = 120; // shorter than GPS — the signal is clean enough
-const MIN_POINTS = 8;
+const MIN_POINTS = 5; // CMAltimeter updates ~1 Hz, so a 120 m window holds few samples
 const MIN_SPEED = 2.0;
 
 function getBridge() {
@@ -56,10 +56,20 @@ export class BarometerSource {
     }
     this._emit = emit;
 
-    // Track horizontal distance traveled from the shared GPS feed.
+    // Track horizontal distance traveled from the shared GPS feed. In canyons,
+    // GPS *position* multipaths badly, but Doppler *speed* stays reliable — so
+    // integrate speed×time for distance and only fall back to position deltas
+    // when speed is unavailable. The barometer supplies the (excellent) vertical.
     let prev = null;
     this._unsubLoc = this.loc.subscribe((fix) => {
-      if (prev) this._cum += haversine(prev.lat, prev.lon, fix.lat, fix.lon);
+      if (prev) {
+        const dt = (fix.ts - prev.ts) / 1000;
+        const sp = fix.speed ?? prev.speed ?? 0;
+        this._cum +=
+          sp > 0.5 && dt > 0 && dt < 5
+            ? sp * dt
+            : haversine(prev.lat, prev.lon, fix.lat, fix.lon);
+      }
       prev = fix;
       this._speed = fix.speed ?? 0;
     });

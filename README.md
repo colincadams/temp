@@ -129,27 +129,27 @@ scripts/gen-icons.mjs   regenerates the PNG icons (no deps)
 All logic is plain ES modules with no build step, so it hosts as-is and is
 reusable from a native wrapper.
 
-## Going native (the barometer upgrade)
+## Native iPhone app (barometer — accurate in canyons)
 
-The recommended path is **Capacitor**, which wraps this exact web app in a
-native shell — no rewrite. You then expose the barometer to the page by
-implementing one bridge that `src/sources/barometerSource.js` already looks for:
+There's a full **Capacitor** native build that wraps this exact web app and adds
+the iPhone barometer, for accurate grade where GPS and the elevation map fail
+(steep canyons). See **[NATIVE.md](NATIVE.md)** for the build & install steps.
 
-```js
-window.HighwayGradeNative = {
-  barometer: {
-    // Call cb for each altimeter sample. On iOS this is CMAltimeter's
-    // relativeAltitude (meters since monitoring started).
-    subscribe(cb) {
-      // cb({ relativeAltitude, timestamp });  // timestamp = epoch ms
-      return function unsubscribe() { /* stop the altimeter */ };
-    },
-  },
-};
-```
+How it fits together:
 
-When that bridge exists, `BarometerSource` activates automatically and the fuser
-starts trusting it above the other sources. Nothing else changes.
+- `src/native.js` — runs only inside the native app (no‑op on the web). It
+  polyfills `navigator.geolocation` via `@capacitor/geolocation` (WKWebView has
+  no web Geolocation) and exposes `window.HighwayGradeNative.barometer`, the
+  bridge `src/sources/barometerSource.js` already looks for.
+- `native/ios/BarometerPlugin.{swift,m}` — a small in‑app plugin bridging
+  CoreMotion's `CMAltimeter` (relative altitude) to that bridge.
+- When the barometer is live and confident, `fusion.js` **attenuates the
+  elevation/GPS sources to ~15%**, so the canyon‑wall jumpiness stops pulling the
+  number around. Horizontal distance for the barometer comes from GPS **speed**
+  (Doppler), which holds up in canyons even when GPS *position* bounces.
+
+Nothing in the core logic changes between web and native — the same modules run
+in both.
 
 ## Privacy
 

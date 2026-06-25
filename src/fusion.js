@@ -39,10 +39,18 @@ export class FusedGradeEstimator {
     let best = { w: -1, source: null };
     const contributors = [];
 
+    // When the barometer is live and confident, it measures altitude change
+    // directly — immune to the GPS dropouts and jumpy elevation-map readings you
+    // get against steep canyon walls. So let it dominate: the other sources are
+    // heavily attenuated to act only as a fallback, not to pull the number around.
+    const baro = this.latest.get("barometer");
+    const baroDominant = baro && now - baro.ts <= STALE_MS && baro.confidence >= 0.6;
+
     for (const [source, est] of this.latest) {
       if (now - est.ts > STALE_MS) continue;
       const trust = TRUST[source] ?? 0.3;
-      const w = trust * clamp(est.confidence, 0, 1);
+      let w = trust * clamp(est.confidence, 0, 1);
+      if (baroDominant && source !== "barometer") w *= 0.15;
       if (w <= 0) continue;
       wSum += w;
       gwSum += w * est.gradePercent;
