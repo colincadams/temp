@@ -84,11 +84,31 @@ read `ok` (it needs ~100 m of travel to lock in). On a grade, the gauge's source
 pill will show **Barometer** as the active source, and the reading will stay
 steady where the elevation map alone would jump around.
 
+## Install without a cord (Wi‑Fi) — free
+
+You only need the USB cable **once**, to pair. After that, every install and every
+weekly re‑sign happens over Wi‑Fi.
+
+1. Do the first **▶ Run** above with the cable connected (this pairs the device).
+2. In Xcode open **Window → Devices and Simulators** (`⇧⌘2`) → select your iPhone
+   under **Devices** → tick **✔ Connect via network**.
+3. Unplug the cable. Your iPhone now shows a network icon and stays available as
+   a run destination as long as it's on the **same Wi‑Fi** as the Mac.
+4. From now on just pick the iPhone in Xcode's destination menu and press **Run**
+   — it installs over the air.
+
+**Beating the 7‑day expiry, cordless:** with a free Apple ID the app stops
+opening after a week. Just press **Run** again in Xcode (wirelessly) to renew —
+re‑running is an *update*, so your settings (vehicle, units) survive. Keep the
+phone unlocked and on the same network; if it doesn't appear, wake it or
+re‑tick the checkbox. (A paid account makes builds last a year if the weekly
+re‑run gets old.)
+
 ## After you change the code
 
 ```bash
 npm run sync     # rebuild www/ + copy into iOS
-# then press Run again in Xcode
+# then press Run again in Xcode (over Wi-Fi once paired)
 ```
 
 (`npm run ios` does build + sync + open in one step.)
