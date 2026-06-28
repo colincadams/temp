@@ -105,8 +105,3 @@ export class LocationService {
     }
   }
 }
-
-/** Best available heading for projecting a point ahead on the road. */
-export function effectiveHeading(fix) {
-  return fix.moveHeading ?? fix.gpsHeading ?? null;
-}

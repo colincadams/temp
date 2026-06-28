@@ -20,7 +20,7 @@ fusing up to three sources, weighted by confidence:
 | Source | Accuracy | Works on web? | Notes |
 | --- | --- | --- | --- |
 | **Barometer** + GPS | **±0.2–0.5%**, fast | No (native only) | Pressure altimeter resolves ~0.1 m. Best by far. |
-| **Elevation map** (DEM) | **±1–2%**, smooth | ✅ yes (primary) | Samples [Open‑Meteo](https://open-meteo.com/en/docs/elevation-api) ahead/behind you. Free, no API key. Needs signal. |
+| **Elevation map** (DEM) | **±1–2%**, smooth | ✅ yes (primary) | Least-squares fit of [Open‑Meteo](https://open-meteo.com/en/docs/elevation-api) elevation along the road you've driven. Free, no API key. Needs signal. |
 | **GPS altitude** | ±5–15%/sample | ✅ yes (fallback) | Noisy; least-squares fit over ~220 m. Works offline. |
 
 In a browser the **elevation map** does the heavy lifting and **GPS altitude**
@@ -154,6 +154,6 @@ in both.
 ## Privacy
 
 Location stays on the device. The only network call is to the Open-Meteo
-elevation API, which receives coordinates near you (a point ahead and behind) to
-return ground elevation. No accounts, no analytics, no storage beyond your
-unit preference in `localStorage`.
+elevation API, which receives recent points along your route to return ground
+elevation. No accounts, no analytics, no storage beyond your unit/vehicle
+preferences in `localStorage`.

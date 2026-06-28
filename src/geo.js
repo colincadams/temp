@@ -31,26 +31,3 @@ export function bearing(lat1, lon1, lat2, lon2) {
     Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
 }
-
-/**
- * Point reached by traveling `dist` meters from (lat, lon) along `brng` degrees.
- * Returns { lat, lon }.
- */
-export function destinationPoint(lat, lon, brng, dist) {
-  const δ = dist / R_EARTH;
-  const θ = toRad(brng);
-  const φ1 = toRad(lat);
-  const λ1 = toRad(lon);
-
-  const sinφ2 =
-    Math.sin(φ1) * Math.cos(δ) + Math.cos(φ1) * Math.sin(δ) * Math.cos(θ);
-  const φ2 = Math.asin(sinφ2);
-  const y = Math.sin(θ) * Math.sin(δ) * Math.cos(φ1);
-  const x = Math.cos(δ) - Math.sin(φ1) * sinφ2;
-  const λ2 = λ1 + Math.atan2(y, x);
-
-  return {
-    lat: toDeg(φ2),
-    lon: (((toDeg(λ2) + 540) % 360) - 180), // normalize to -180..180
-  };
-}
