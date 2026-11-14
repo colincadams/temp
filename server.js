@@ -71,6 +71,18 @@ function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'),
 
     if (p === '/api/parts/search' && m === 'GET') return { parts: catalog.searchParts(sp.get('q') || '') };
 
+    // Names, images and likely colours for parts recognised on the phone.
+    if (p === '/api/parts/info' && m === 'GET') {
+      const rgbHex = sp.get('rgb');
+      const rgb = rgbHex && /^[0-9a-f]{6}$/i.test(rgbHex) ? hexToRgb(rgbHex) : null;
+      const parts = [];
+      for (const num of (sp.get('nums') || '').split(',').slice(0, 50)) {
+        const pi = catalog.resolvePart(num);
+        if (pi !== undefined) parts.push({ ...catalog.partInfo(pi, rgb), score: 0 });
+      }
+      return { parts };
+    }
+
     if (p === '/api/identify' && m === 'POST') {
       const image = await readBody(req);
       if (!image.length) throw bad('Empty image');

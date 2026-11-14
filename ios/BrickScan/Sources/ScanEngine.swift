@@ -11,8 +11,9 @@ import simd
 /// 2. detect every fully visible piece (`PieceDetector`);
 /// 3. project each one onto the table to get its real-world position and size;
 /// 4. match it to a piece already seen at that spot, or start tracking a new one, so nothing is counted twice;
-/// 5. send a crop of each piece to the server for recognition, from up to two different viewpoints.
-final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate {
+/// 5. recognise each piece. With a bundled model (`PartClassifier`) this happens on the phone from many
+///    viewpoints, fused with the piece's measured size; otherwise two crops are sent to the server.
+final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecked Sendable {
 
     // MARK: Published (main thread)
 
@@ -34,6 +35,10 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate {
     private let viewsPerPiece = 2
     private let secondViewBaseline: Float = 0.08 // metres the camera must move before a second view is worth sending
     private let maxConcurrentRequests = 3
+    private let deviceViewsPerPiece = 8          // on-device recognition: views fused per piece
+    private let deviceViewBaseline: Float = 0.03 // metres the camera must move between those views
+    private let deviceViewsPerFrame = 12         // keeps frame processing responsive on a crowded table
+    private let resolveAfterViews = 3            // views before asking the server for names and colours
 
     // MARK: State (confined to `queue`)
 
@@ -43,6 +48,7 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate {
         var position: SIMD3<Float>
         var sightings = 1
         var longSamples: [Float] = []
+        var shortSamples: [Float] = []
         var rSamples: [Float] = [], gSamples: [Float] = [], bSamples: [Float] = []
         var bestQuality: Float = 0
         var thumbnail: Data?
@@ -53,6 +59,11 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate {
         var lastSubmitCamera: SIMD3<Float>?
         var scoreSum: [String: Double] = [:]
         var info: [String: Candidate] = [:]
+        // On-device recognition
+        var logSum: [Float] = []
+        var deviceViews = 0
+        var lastDeviceCamera: SIMD3<Float>?
+        var requestedInfo = Set<String>()
 
         init(position: SIMD3<Float>, time: TimeInterval) {
             self.position = position
@@ -60,16 +71,19 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate {
         }
 
         var longMm: Float { ScanEngine.median(longSamples) }
+        var shortMm: Float { ScanEngine.median(shortSamples) }
 
         var rgbHex: String {
             String(format: "%02x%02x%02x", Int(ScanEngine.median(rSamples)), Int(ScanEngine.median(gSamples)), Int(ScanEngine.median(bSamples)))
         }
 
-        func addSample(longMm: Float, blob: DetectedBlob) {
+        func addSample(longMm: Float, shortMm: Float, blob: DetectedBlob) {
             if longSamples.count >= 25 {
-                longSamples.removeFirst(); rSamples.removeFirst(); gSamples.removeFirst(); bSamples.removeFirst()
+                longSamples.removeFirst(); shortSamples.removeFirst()
+                rSamples.removeFirst(); gSamples.removeFirst(); bSamples.removeFirst()
             }
             longSamples.append(longMm)
+            shortSamples.append(shortMm)
             rSamples.append(Float(blob.r)); gSamples.append(Float(blob.g)); bSamples.append(Float(blob.b))
         }
 
@@ -82,14 +96,18 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     private struct Job {
+        enum Work {
+            case identify(jpeg: Data, longMm: Float)   // server recognises the crop
+            case describe(partNums: [String])          // server supplies names, images and colours
+        }
         let pieceID: UUID
-        let jpeg: Data
         let rgbHex: String
-        let longMm: Float
+        let work: Work
     }
 
     private let queue = DispatchQueue(label: "brickscan.engine", qos: .userInitiated)
     private let ciContext = CIContext()
+    private lazy var classifier = PartClassifier(context: ciContext)
     private var tracked: [TrackedPiece] = []
     private var jobs: [Job] = []
     private var activeRequests = 0
@@ -282,6 +300,7 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate {
         let maxCenterDistance = (centerX * centerX + centerY * centerY).squareRoot()
 
         var matched = Set<UUID>()
+        var deviceBudget = deviceViewsPerFrame
         for blob in blobs {
             let fullX = blob.cx * step, fullY = blob.cy * step
             // Millimetres per work pixel at this spot, from two short steps across the table.
@@ -311,19 +330,33 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate {
                 tracked.append(piece)
             }
             matched.insert(piece.id)
-            piece.addSample(longMm: longMm, blob: blob)
+            piece.addSample(longMm: longMm, shortMm: blob.minor * mmPerPixel, blob: blob)
 
             // Bigger and nearer the middle of the frame is a better picture.
             let dx = blob.cx - centerX, dy = blob.cy - centerY
             let quality = Float(blob.area) * (1 - 0.5 * (dx * dx + dy * dy).squareRoot() / maxCenterDistance)
             piece.bestQuality = max(piece.bestQuality, quality)
 
-            if shouldSubmit(piece, quality: quality, cameraPosition: cameraPosition),
-               let jpeg = crop(buffer, blob: blob, step: work.step) {
+            if let classifier {
+                if deviceBudget > 0, shouldClassify(piece, cameraPosition: cameraPosition),
+                   let logProbabilities = classifier.classify(squareCrop(buffer, blob: blob, step: work.step)) {
+                    deviceBudget -= 1
+                    if piece.logSum.isEmpty { piece.logSum = [Float](repeating: 0, count: logProbabilities.count) }
+                    for i in 0..<logProbabilities.count { piece.logSum[i] += logProbabilities[i] }
+                    piece.deviceViews += 1
+                    piece.lastDeviceCamera = cameraPosition
+                    if quality >= piece.thumbnailQuality, let jpeg = crop(buffer, blob: blob, step: work.step) {
+                        piece.thumbnail = jpeg
+                        piece.thumbnailQuality = quality
+                    }
+                    requestDescriptions(for: piece, classifier: classifier)
+                }
+            } else if shouldSubmit(piece, quality: quality, cameraPosition: cameraPosition),
+                      let jpeg = crop(buffer, blob: blob, step: work.step) {
                 if quality >= piece.thumbnailQuality { piece.thumbnail = jpeg; piece.thumbnailQuality = quality }
                 piece.inFlight += 1
                 piece.lastSubmitCamera = cameraPosition
-                jobs.append(Job(pieceID: piece.id, jpeg: jpeg, rgbHex: piece.rgbHex, longMm: piece.longMm))
+                jobs.append(Job(pieceID: piece.id, rgbHex: piece.rgbHex, work: .identify(jpeg: jpeg, longMm: piece.longMm)))
             }
         }
 
@@ -345,6 +378,45 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate {
         return true
     }
 
+    // MARK: On-device recognition
+
+    private func shouldClassify(_ piece: TrackedPiece, cameraPosition: SIMD3<Float>) -> Bool {
+        guard piece.sightings >= confirmAfter, piece.deviceViews < deviceViewsPerPiece else { return false }
+        if let last = piece.lastDeviceCamera { return simd_distance(last, cameraPosition) >= deviceViewBaseline }
+        return true
+    }
+
+    /// The most likely shapes for a piece: views averaged, then weighed against its measured size.
+    private func fusedShapes(_ piece: TrackedPiece, classifier: PartClassifier, limit: Int = 4) -> [(shape: ShapeClass, probability: Double)] {
+        guard piece.deviceViews > 0, piece.logSum.count == classifier.classes.count else { return [] }
+        let prior = classifier.sizeLogPrior(longMm: piece.longMm, shortMm: piece.shortMm)
+        var scores = [Float](repeating: 0, count: prior.count)
+        // Averaging rather than summing keeps near-identical views from producing false certainty.
+        for i in 0..<scores.count { scores[i] = piece.logSum[i] / Float(piece.deviceViews) + prior[i] }
+        let logProbabilities = PartClassifier.logSoftmax(scores)
+        let order = logProbabilities.indices.sorted { logProbabilities[$0] > logProbabilities[$1] }.prefix(limit)
+        return order.map { (classifier.classes[$0], Double(exp(logProbabilities[$0]))) }
+    }
+
+    /// Ask the server once for the name, picture and colour ranking of each shape in the running.
+    private func requestDescriptions(for piece: TrackedPiece, classifier: PartClassifier) {
+        guard piece.deviceViews >= resolveAfterViews, piece.failures < 3 else { return }
+        let wanted = fusedShapes(piece, classifier: classifier).map { $0.shape.partNum }.filter { !piece.requestedInfo.contains($0) }
+        guard !wanted.isEmpty else { return }
+        piece.requestedInfo.formUnion(wanted)
+        piece.inFlight += 1
+        jobs.append(Job(pieceID: piece.id, rgbHex: piece.rgbHex, work: .describe(partNums: wanted)))
+    }
+
+    private func candidates(for piece: TrackedPiece) -> [Candidate] {
+        guard let classifier else { return piece.candidates }
+        return fusedShapes(piece, classifier: classifier).compactMap { entry in
+            guard var candidate = piece.info[entry.shape.partNum] else { return nil }
+            candidate.score = entry.probability
+            return candidate
+        }
+    }
+
     // MARK: Recognition requests
 
     private func pump() {
@@ -356,7 +428,12 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate {
                 let candidates: [Candidate]?
                 let message: String?
                 do {
-                    candidates = try await API.shared.identify(jpeg: job.jpeg, rgbHex: job.rgbHex, longMm: job.longMm)
+                    switch job.work {
+                    case .identify(let jpeg, let longMm):
+                        candidates = try await API.shared.identify(jpeg: jpeg, rgbHex: job.rgbHex, longMm: longMm)
+                    case .describe(let partNums):
+                        candidates = try await API.shared.partInfo(partNums: partNums, rgbHex: job.rgbHex)
+                    }
                     message = nil
                 } catch {
                     candidates = nil
@@ -374,15 +451,21 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate {
         defer { pump() }
         guard generation == self.generation, let piece = tracked.first(where: { $0.id == job.pieceID }) else { return }
         piece.inFlight -= 1
-        if let candidates {
+        switch (job.work, candidates) {
+        case (.identify, let candidates?):
             piece.views += 1
             for candidate in candidates {
                 piece.scoreSum[candidate.partNum, default: 0] += candidate.score
                 piece.info[candidate.partNum] = candidate   // newest view carries the freshest colour ranking
             }
-        } else {
+        case (.identify, nil):
             piece.failures += 1
             piece.lastSubmitCamera = nil
+        case (.describe, let candidates?):
+            for candidate in candidates { piece.info[candidate.partNum] = candidate }
+        case (.describe(let partNums), nil):
+            piece.failures += 1
+            piece.requestedInfo.subtract(partNums)   // ask again on a later view
         }
         DispatchQueue.main.async { self.lastError = error }
         publish(hint: nil)
@@ -392,11 +475,11 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate {
 
     private func publish(hint: String?) {
         let snapshots: [PieceSnapshot] = tracked.filter { $0.sightings >= confirmAfter }.map { piece in
-            let candidates = piece.candidates
+            let candidates = self.candidates(for: piece)
             let state: PieceState
             if !candidates.isEmpty {
                 state = .identified
-            } else if piece.inFlight > 0 {
+            } else if piece.inFlight > 0 || (piece.deviceViews > 0 && piece.deviceViews < resolveAfterViews) {
                 state = .identifying
             } else if piece.views > 0 || piece.failures >= 2 {
                 state = .unknown
@@ -464,6 +547,17 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate {
         let image = CIImage(cvPixelBuffer: buffer).cropped(to: rect).oriented(.right)
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
         return ciContext.jpegRepresentation(of: image, colorSpace: colorSpace)
+    }
+
+    /// Square region centred on a piece, sized so the piece fills about 70% of it, as in the training images.
+    private func squareCrop(_ buffer: CVPixelBuffer, blob: DetectedBlob, step: Int) -> CIImage {
+        let fullHeight = CGFloat(CVPixelBufferGetHeight(buffer))
+        let s = CGFloat(step)
+        let side = CGFloat(max(blob.maxX - blob.minX, blob.maxY - blob.minY) + 1) * s / 0.7
+        let centreX = CGFloat(blob.minX + blob.maxX + 1) / 2 * s, centreY = CGFloat(blob.minY + blob.maxY + 1) / 2 * s
+        // Core Image's origin is the bottom-left corner. Clamping repeats edge pixels if the square leaves the frame.
+        let rect = CGRect(x: centreX - side / 2, y: fullHeight - centreY - side / 2, width: side, height: side)
+        return CIImage(cvPixelBuffer: buffer).clampedToExtent().cropped(to: rect)
     }
 
     fileprivate static func median(_ values: [Float]) -> Float {

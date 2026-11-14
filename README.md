@@ -44,7 +44,8 @@ How the sweep works (`ios/BrickScan/Sources/ScanEngine.swift`):
 
 - ARKit tracks the phone and finds the table, so each detected piece gets a real position and a size in millimetres.
 - A piece seen again at the same spot is the same piece, so overlapping passes do not double-count.
-- Each piece is sent for recognition from up to two viewpoints and the results are averaged. The measured length is sent too, so the server can tell a 1 x 2 from a 1 x 4.
+- With a trained model bundled (see `ml/README.md`), each piece is recognised on the phone from up to eight viewpoints, and the result is weighed against the piece's measured size and each shape's true dimensions. The server then only supplies names, pictures and colours.
+- Without a model, each piece is sent to the server for recognition from up to two viewpoints, along with its measured length so a 1 x 2 can be told from a 1 x 4.
 - White balance is locked once the table is in view so colours stay consistent across the sweep.
 - Frames are skipped while the phone is tilted or moving fast, because blurred or oblique views hurt accuracy.
 

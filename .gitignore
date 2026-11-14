@@ -7,4 +7,4 @@ ml/real/
 ml/manifest.json
 __pycache__/
 complete.zip
-ios/BrickScan/Model/
+ios/BrickScan/Sources/Model/

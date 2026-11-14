@@ -22,6 +22,10 @@ struct IdentifyResponse: Codable {
     let candidates: [Candidate]
 }
 
+struct PartInfoResponse: Codable {
+    let parts: [Candidate]
+}
+
 struct InventoryItem: Codable, Identifiable, Hashable {
     let partNum: String
     let name: String

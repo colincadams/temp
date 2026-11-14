@@ -1,6 +1,6 @@
 """Convert a trained checkpoint into what the iPhone app loads: a Core ML model and a class list.
 
-    python ml/export.py --checkpoint ml/runs/v1/best.pt --out ios/BrickScan/Model
+    python ml/export.py --checkpoint ml/runs/v1/best.pt --out ios/BrickScan/Sources/Model
 """
 import argparse
 import json
@@ -28,7 +28,7 @@ class Deployable(torch.nn.Module):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", required=True)
-    ap.add_argument("--out", default="ios/BrickScan/Model")
+    ap.add_argument("--out", default="ios/BrickScan/Sources/Model")
     args = ap.parse_args()
 
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)

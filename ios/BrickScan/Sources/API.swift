@@ -72,6 +72,15 @@ final class API {
         return out.candidates
     }
 
+    /// Names, images and colour rankings for parts recognised on the phone.
+    func partInfo(partNums: [String], rgbHex: String) async throws -> [Candidate] {
+        let out: PartInfoResponse = try await request("api/parts/info", query: [
+            URLQueryItem(name: "nums", value: partNums.joined(separator: ",")),
+            URLQueryItem(name: "rgb", value: rgbHex),
+        ])
+        return out.parts
+    }
+
     func inventory() async throws -> InventoryResponse { try await request("api/inventory") }
 
     func add(_ items: [NewItem]) async throws -> InventoryResponse {
