@@ -1,0 +1,9 @@
+bpy
+numpy
+scipy
+trimesh
+pillow
+torch
+torchvision
+timm
+coremltools

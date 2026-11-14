@@ -1,2 +1,10 @@
 node_modules/
 data/
+ml/ldraw/
+ml/dataset/
+ml/runs/
+ml/real/
+ml/manifest.json
+__pycache__/
+complete.zip
+ios/BrickScan/Model/
