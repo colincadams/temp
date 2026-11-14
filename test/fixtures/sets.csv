@@ -1,0 +1,4 @@
+set_num,name,year,theme_id,num_parts,img_url
+100-1,Small Car,2020,2,5,https://example.test/100.jpg
+200-1,Big Wall,2021,1,10,https://example.test/200.jpg
+300-1,Empty Book,2022,1,0,https://example.test/300.jpg

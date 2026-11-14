@@ -1,0 +1,8 @@
+inventory_id,part_num,color_id,quantity,is_spare,img_url
+10,3001,4,2,False,https://cdn.rebrickable.com/media/parts/elements/300121.jpg
+10,3020,0,2,False,
+10,3069bpr0001,1,1,False,
+10,3069b,1,1,True,
+11,3001,0,99,False,
+20,3001,4,6,False,
+20,3001,1,4,False,

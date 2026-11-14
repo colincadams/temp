@@ -1,0 +1,13 @@
+{
+  "name": "brick-inventory",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Photograph your Lego pieces, build an inventory, and see which sets you can build.",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server.js",
+    "update-data": "node server.js --refresh-data",
+    "test": "node --test test/*.test.js"
+  }
+}

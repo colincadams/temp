@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Brick Inventory</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Brick Inventory</h1>
+    <nav>
+      <button data-tab="scan" class="active">Scan</button>
+      <button data-tab="inventory">Inventory <span id="inv-badge" class="badge">0</span></button>
+      <button data-tab="builds">What can I build?</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ───────── Scan ───────── -->
+    <section id="tab-scan">
+      <div class="panel">
+        <h2>Photograph your pieces</h2>
+        <p class="hint">Spread pieces out on a plain surface in a colour none of the pieces share (white paper for coloured pieces, dark paper for white ones) so none are touching, then take a photo from above.</p>
+        <label class="btn primary">
+          Take or choose a photo
+          <input id="photo" type="file" accept="image/*" capture="environment" hidden>
+        </label>
+        <label class="btn">
+          Choose from library
+          <input id="photo-lib" type="file" accept="image/*" hidden>
+        </label>
+      </div>
+
+      <div id="detect" class="panel" hidden>
+        <h2><span id="detect-count">0</span> pieces found</h2>
+        <p class="hint">Tap a box to skip it. If pieces are missed or merged, adjust the sensitivity.</p>
+        <div class="canvas-wrap"><canvas id="preview"></canvas></div>
+        <div class="row">
+          <label class="grow">Sensitivity <input id="sensitivity" type="range" min="0" max="1" step="0.05" value="0.5"></label>
+          <button id="identify" class="btn primary">Identify pieces</button>
+        </div>
+        <p id="identify-status" class="hint" role="status"></p>
+      </div>
+
+      <div id="results" class="panel" hidden>
+        <h2>Review and add</h2>
+        <p class="hint">Check each match, fix the part, colour or count if needed, and untick anything that's wrong.</p>
+        <div id="result-list" class="cards"></div>
+        <div class="row end">
+          <button id="add-results" class="btn primary">Add to inventory</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────── Inventory ───────── -->
+    <section id="tab-inventory" hidden>
+      <div class="panel">
+        <div class="row">
+          <h2 class="grow"><span id="inv-pieces">0</span> pieces · <span id="inv-lots">0</span> different parts</h2>
+          <a class="btn" href="/api/inventory.csv" download>Export CSV</a>
+          <button id="inv-clear" class="btn danger">Clear all</button>
+        </div>
+        <div class="row">
+          <input id="part-search" class="grow" type="search" placeholder="Add a part by name or number, e.g. “brick 2 x 4” or 3001">
+        </div>
+        <div id="search-results" class="cards"></div>
+        <form id="add-set-form" class="row">
+          <input id="add-set" class="grow" type="text" placeholder="Own a complete set? Add all its parts by set number, e.g. 31058">
+          <button class="btn">Add set</button>
+        </form>
+        <p id="inv-status" class="hint" role="status"></p>
+      </div>
+      <div class="panel">
+        <input id="inv-filter" type="search" placeholder="Filter inventory…">
+        <div id="inv-list" class="cards"></div>
+        <p id="inv-empty" class="hint">Nothing here yet. Scan some pieces to get started.</p>
+      </div>
+    </section>
+
+    <!-- ───────── Builds ───────── -->
+    <section id="tab-builds" hidden>
+      <div class="panel">
+        <div class="row wrap">
+          <input id="b-q" class="grow" type="search" placeholder="Search sets…">
+          <select id="b-theme"><option value="">All themes</option></select>
+          <label>Min. pieces <input id="b-min" type="number" min="1" value="20" style="width:5em"></label>
+        </div>
+        <div class="row wrap">
+          <label><input id="b-color" type="checkbox"> Ignore colour</label>
+          <label><input id="b-variants" type="checkbox" checked> Treat prints &amp; mould variants as the same part</label>
+        </div>
+        <p id="b-summary" class="hint" role="status"></p>
+      </div>
+      <div id="b-list" class="sets"></div>
+      <div class="row center"><button id="b-more" class="btn" hidden>Show more</button></div>
+    </section>
+  </main>
+
+  <dialog id="set-dialog">
+    <div id="set-detail"></div>
+    <div class="row end"><button class="btn" id="set-close">Close</button></div>
+  </dialog>
+
+  <script src="segment.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
