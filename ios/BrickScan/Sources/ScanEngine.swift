@@ -8,7 +8,7 @@ import simd
 ///
 /// For each processed camera frame:
 /// 1. find the table plane and check the phone is facing it and moving slowly enough for sharp images;
-/// 2. detect every fully visible piece (`PieceDetector`);
+/// 2. detect every fully visible piece (`InstanceDetector` when its model is bundled, else `PieceDetector`);
 /// 3. project each one onto the table to get its real-world position and size;
 /// 4. match it to a piece already seen at that spot, or start tracking a new one, so nothing is counted twice;
 /// 5. recognise each piece. With a bundled model (`PartClassifier`) this happens on the phone from many
@@ -108,6 +108,7 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
     private let queue = DispatchQueue(label: "brickscan.engine", qos: .userInitiated)
     private let ciContext = CIContext()
     private lazy var classifier = PartClassifier(context: ciContext)
+    private lazy var instanceDetector = InstanceDetector()
     private var tracked: [TrackedPiece] = []
     private var jobs: [Job] = []
     private var activeRequests = 0
@@ -293,7 +294,9 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
             publish(hint: "Unsupported camera format.")
             return
         }
-        let blobs = PieceDetector.detect(rgba: work.rgba, width: work.width, height: work.height)
+        // The trained detector splits touching pieces; without it, only pieces standing apart are separated.
+        let blobs = instanceDetector?.detect(rgba: work.rgba, width: work.width, height: work.height)
+            ?? PieceDetector.detect(rgba: work.rgba, width: work.width, height: work.height)
         let projector = TableProjector(frame: frame, tableY: tableY)
         let step = Float(work.step)
         let centerX = Float(work.width) / 2, centerY = Float(work.height) / 2

@@ -27,6 +27,18 @@ python ml/evaluate.py --checkpoint ml/runs/v1/best.pt --photos ml/real
 python ml/export.py --checkpoint ml/runs/v1/best.pt
 ```
 
+## Piece detector
+
+A second model finds each piece in the camera frame, including pieces that touch. Without it the app falls back to a colour threshold that merges touching pieces.
+
+```sh
+python ml/render_scenes.py --ldraw ml/ldraw --scenes 3000    # whole tables with a per-piece outline map; resumable
+python ml/train_detector.py                                  # reports pieces found and false detections on held-out tables
+python ml/export_detector.py --checkpoint ml/runs/detector/best.pt
+```
+
+The network predicts, for each pixel, whether it belongs to a piece, how near it is to a piece's centre, and the offset to that centre. Two touching pieces share an edge but not a centre, so grouping pixels by the centre they point at separates them. The scenes deliberately include pieces pushed flush together in the same colour, the hardest case.
+
 ## Design
 
 - **Shape classes.** Printed and re-moulded versions of a part are one class, since they are the same shape. 1,000 classes cover about 93% of all pieces in sets since 1990; 3,000 cover about 96%.
@@ -37,4 +49,6 @@ python ml/export.py --checkpoint ml/runs/v1/best.pt
 
 ## Status
 
-A pilot has been run on an M4 Pro: 100 shapes, 150 images each, 8 epochs. Rendering took 25 minutes, training 28 minutes, and the model reached 84% top-1 and 97.5% top-5 on held-out rendered images (still improving when it stopped, and before the size check the app adds). It exported and compiled into the app. Accuracy on real photos is unmeasured, and no full-size model has been trained yet.
+- **Recognition model:** a pilot has been run on an M4 Pro: 100 shapes, 150 images each, 8 epochs. Rendering took 25 minutes, training 28 minutes, and the model reached 84% top-1 and 97.5% top-5 on held-out rendered images (still improving when it stopped, and before the size check the app adds). It exported and compiled into the app. No full-size model has been trained yet.
+- **Piece detector:** run end to end at toy scale only (57 small scenes, a network trained from scratch on a CPU), enough to show it learns and exports. No usable detector has been trained yet.
+- Accuracy on real photos is unmeasured for both.

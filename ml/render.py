@@ -21,6 +21,7 @@ import bpy  # must come first: it makes bmesh and mathutils importable
 import bmesh
 import numpy as np
 import trimesh
+from scipy.spatial import ConvexHull
 from mathutils import Matrix, Vector
 
 from ldraw import LDrawLibrary, MAIN_COLOUR
@@ -50,6 +51,7 @@ class PartFactory:
         self.meshes = {}
         self.poses = {}
         self.radius = {}
+        self.hulls = {}
 
     def _prepare(self, part_num):
         verts, faces, colours = self.lib.load_part(part_num)
@@ -79,9 +81,22 @@ class PartFactory:
             lift[2, 3] = -verts[:, 2].min()
             transforms, probs = [lift], [1.0]
         self.poses[part_num] = (list(transforms), list(np.asarray(probs) / np.sum(probs)))
+        self.hulls[part_num] = np.asarray(hull.vertices)
         self.radius[part_num] = float(np.linalg.norm(verts - verts.mean(axis=0), axis=1).max())
 
-    def place(self, part_num, colour, xy, rng):
+    def resting_pose(self, part_num, rng, yaw=None):
+        """A random way for the part to lie on the table: (4x4 transform, outline of its footprint on the table)."""
+        if part_num not in self.meshes:
+            self._prepare(part_num)
+        transforms, probs = self.poses[part_num]
+        angle = rng.uniform(0, math.tau) if yaw is None else yaw
+        spin = np.eye(4)
+        spin[:2, :2] = [[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]]
+        pose = spin @ np.asarray(transforms[rng.choices(range(len(probs)), weights=probs)[0]])
+        points = (self.hulls[part_num] @ pose[:3, :3].T + pose[:3, 3])[:, :2]
+        return pose, points[ConvexHull(points).vertices]   # counter-clockwise
+
+    def place(self, part_num, colour, xy, rng, pose=None):
         """Add the part to the scene resting on the table at `xy`. Returns (object, centre, radius)."""
         if part_num not in self.meshes:
             self._prepare(part_num)
@@ -90,9 +105,9 @@ class PartFactory:
         obj.data.materials.append(plastic("main", colour["rgb"], colour["trans"], rng))
         for code in codes:
             obj.data.materials.append(plastic(f"c{code}", self.lib.fixed_colours.get(code, (0.5, 0.5, 0.5)), rng=rng))
-        transforms, probs = self.poses[part_num]
-        rest = Matrix(transforms[rng.choices(range(len(probs)), weights=probs)[0]].tolist())
-        obj.matrix_world = Matrix.Translation((xy[0], xy[1], 0)) @ Matrix.Rotation(rng.uniform(0, math.tau), 4, "Z") @ rest
+        if pose is None:
+            pose, _ = self.resting_pose(part_num, rng)
+        obj.matrix_world = Matrix.Translation((xy[0], xy[1], 0)) @ Matrix(np.asarray(pose).tolist())
         bpy.context.scene.collection.objects.link(obj)
         bpy.context.view_layer.update()
         corners = [obj.matrix_world @ Vector(c) for c in obj.bound_box]

@@ -8,3 +8,5 @@ ml/manifest.json
 __pycache__/
 complete.zip
 ios/BrickScan/Sources/Model/
+ml/scenes/
+.venv/
