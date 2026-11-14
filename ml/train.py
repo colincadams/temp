@@ -2,7 +2,8 @@
 
     python ml/train.py --data ml/dataset --manifest ml/manifest.json --out ml/runs/v1
 
-Uses an NVIDIA GPU, Apple Silicon GPU, or CPU, whichever is available.
+Uses an NVIDIA GPU, Apple Silicon GPU, or CPU, whichever is available. If a run is interrupted,
+repeat the command with --resume to continue from the last finished epoch.
 """
 import argparse
 import csv
@@ -84,6 +85,7 @@ def main():
     ap.add_argument("--batch-size", type=int, default=128)
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--workers", type=int, default=min(8, os.cpu_count() or 1))
+    ap.add_argument("--resume", action="store_true", help="continue an interrupted run from the last finished epoch in --out")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -109,8 +111,18 @@ def main():
         optimiser, lambda s: (s + 1) / max(warmup, 1) if s < warmup else 0.5 * (1 + math.cos(math.pi * (s - warmup) / max(1, total_steps - warmup))))
 
     os.makedirs(args.out, exist_ok=True)
-    best = -1.0
-    for epoch in range(args.epochs):
+    best, first_epoch = -1.0, 0
+    last_path = os.path.join(args.out, "last.pt")
+    if args.resume and os.path.exists(last_path):
+        last = torch.load(last_path, map_location=device, weights_only=False)
+        if last["class_ids"] != class_ids:
+            raise SystemExit("The dataset's shapes differ from the interrupted run's; start a new run in a different --out.")
+        model.load_state_dict(last["state"])
+        optimiser.load_state_dict(last["optimiser"])
+        schedule.load_state_dict(last["schedule"])
+        best, first_epoch = last["best"], last["epoch"] + 1
+        print(f"resuming after epoch {first_epoch} (best held-out top-1 so far {best:.1%})")
+    for epoch in range(first_epoch, args.epochs):
         model.train()
         started, running, seen = time.time(), 0.0, 0
         for images, labels in train_loader:
@@ -129,6 +141,9 @@ def main():
             best = top1
             torch.save({"state": model.state_dict(), "backbone": args.backbone, "image_size": args.image_size,
                         "classes": [manifest[c] for c in class_ids]}, os.path.join(args.out, "best.pt"))
+        torch.save({"state": model.state_dict(), "optimiser": optimiser.state_dict(), "schedule": schedule.state_dict(),
+                    "epoch": epoch, "best": best, "class_ids": class_ids}, last_path + ".tmp")
+        os.replace(last_path + ".tmp", last_path)
     print(f"best held-out top-1 {best:.1%}; saved {os.path.join(args.out, 'best.pt')}")
     print("Held-out images are synthetic too. Measure real accuracy with ml/evaluate.py on photos of your own pieces.")
 

@@ -20,7 +20,7 @@ python ml/build_manifest.py --ldraw ml/ldraw --max-classes 1000
 python ml/render.py --ldraw ml/ldraw --per-class 300
 
 # 4. Train, then check against real photos arranged as ml/real/<part number>/*.jpg.
-python ml/train.py
+python ml/train.py            # add --resume to continue an interrupted run
 python ml/evaluate.py --checkpoint ml/runs/v1/best.pt --photos ml/real
 
 # 5. Convert for the iPhone app.
@@ -50,5 +50,5 @@ The network predicts, for each pixel, whether it belongs to a piece, how near it
 ## Status
 
 - **Recognition model:** a pilot has been run on an M4 Pro: 100 shapes, 150 images each, 8 epochs. Rendering took 25 minutes, training 28 minutes, and the model reached 84% top-1 and 97.5% top-5 on held-out rendered images (still improving when it stopped, and before the size check the app adds). It exported and compiled into the app. No full-size model has been trained yet.
-- **Piece detector:** run end to end at toy scale only (57 small scenes, a network trained from scratch on a CPU), enough to show it learns and exports. No usable detector has been trained yet.
+- **Piece detector:** trained on an M4 Pro on 2,000 rendered tables averaging 225 pieces (50 minutes to render, 35 to train). On held-out rendered tables it finds 99.1% of pieces standing apart and 94.7% of pieces touching a neighbour, and 6% of its detections are not real pieces. It is exported and compiled into the app.
 - Accuracy on real photos is unmeasured for both.
