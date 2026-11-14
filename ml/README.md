@@ -16,8 +16,8 @@ curl -L -o data/part_categories.csv.gz https://cdn.rebrickable.com/media/downloa
 # 2. Choose the shapes to learn, most used first.
 python ml/build_manifest.py --ldraw ml/ldraw --max-classes 1000
 
-# 3. Render training images. Use --device GPU on a Mac; split with --first-class/--last-class to run in parallel.
-python ml/render.py --ldraw ml/ldraw --per-class 300 --device GPU
+# 3. Render training images (about 0.1 s each on an M4 Pro). Safe to interrupt and restart.
+python ml/render.py --ldraw ml/ldraw --per-class 300
 
 # 4. Train, then check against real photos arranged as ml/real/<part number>/*.jpg.
 python ml/train.py
@@ -37,4 +37,4 @@ python ml/export.py --checkpoint ml/runs/v1/best.pt
 
 ## Status
 
-The pipeline has been run end to end at toy scale only (10 shapes, 600 images, a small network trained on a CPU for a minute) to prove each step works. No usable model has been trained yet, and accuracy on real photos is unmeasured.
+A pilot has been run on an M4 Pro: 100 shapes, 150 images each, 8 epochs. Rendering took 25 minutes, training 28 minutes, and the model reached 84% top-1 and 97.5% top-5 on held-out rendered images (still improving when it stopped, and before the size check the app adds). It exported and compiled into the app. Accuracy on real photos is unmeasured, and no full-size model has been trained yet.

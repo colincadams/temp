@@ -6,7 +6,8 @@ pieces, so a model trained on these images copes with real photos.
 
     python ml/render.py --manifest ml/manifest.json --ldraw /path/to/ldraw --out ml/dataset --per-class 200
 
-Split the work across processes or machines with --first-class / --last-class.
+Split the work across processes with --first-class / --last-class. Classes already rendered are skipped,
+so an interrupted run can be restarted with the same command.
 """
 import argparse
 import csv
@@ -195,7 +196,7 @@ def main():
     ap.add_argument("--last-class", type=int, default=None)
     ap.add_argument("--resolution", type=int, default=224)
     ap.add_argument("--samples", type=int, default=24)
-    ap.add_argument("--device", choices=["CPU", "GPU"], default="CPU")
+    ap.add_argument("--device", choices=["CPU", "GPU"], default="CPU", help="CPU is faster at this image size, even on Apple Silicon")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -217,43 +218,47 @@ def main():
         scene.cycles.device = "GPU"
     factory = PartFactory(lib)
     os.makedirs(args.out, exist_ok=True)
-    labels_path = os.path.join(args.out, f"labels-{args.first_class}.csv")
-    with open(labels_path, "w", newline="") as f:
-        out = csv.writer(f)
-        out.writerow(["file", "class_id", "part_num", "color_id"])
-        for c in selected:
-            rng = random.Random(args.seed * 100003 + c["class_id"])
-            folder = os.path.join(args.out, "images", str(c["class_id"]))
-            os.makedirs(folder, exist_ok=True)
-            ids = [int(k) for k in c["colours"] if int(k) in palette]
-            weights = [c["colours"][str(k)] ** 0.5 for k in ids]   # flatten so rare colours still appear
-            for n in range(args.per_class):
-                colour = palette[rng.choices(ids, weights=weights)[0]] if ids and rng.random() < 0.85 else rng.choice(common)
-                placed = [factory.place(c["part_num"], colour, (0, 0), rng)]
-                _, centre, radius = placed[0]
-                # Neighbours crowd the edges of the crop, as on a real table.
-                for _ in range(rng.choice([0, 0, 1, 2, 3])):
-                    other = rng.choice(classes[:400])
-                    angle = rng.uniform(0, math.tau)
-                    try:
-                        gap = (radius + factory.radius.get(other["part_num"], 15)) * rng.uniform(1.0, 1.7)
-                        placed.append(factory.place(other["part_num"], rng.choice(common), (math.cos(angle) * gap, math.sin(angle) * gap), rng))
-                    except FileNotFoundError:
-                        pass
-                randomise_environment(scene, table_mat, sun, rng)
-                aim_camera(camera, centre, radius, rng)
-                rel = os.path.join("images", str(c["class_id"]), f"{n:05d}.jpg")
-                scene.render.filepath = os.path.join(args.out, rel)
-                bpy.ops.render.render(write_still=True)
-                out.writerow([rel, c["class_id"], c["part_num"], colour["id"]])
-                for obj, _, _ in placed:
-                    mesh = obj.data
-                    for mat in list(mesh.materials):
-                        bpy.data.materials.remove(mat)
-                    bpy.data.objects.remove(obj)
-                    bpy.data.meshes.remove(mesh)
-            f.flush()
-            print(f"class {c['class_id']} {c['part_num']}: {args.per_class} images", flush=True)
+    for c in selected:
+        # One label file per class, written when the class is complete, so an interrupted run can simply be restarted.
+        labels_path = os.path.join(args.out, f"labels-{c['class_id']}.csv")
+        if os.path.exists(labels_path):
+            continue
+        rng = random.Random(args.seed * 100003 + c["class_id"])
+        os.makedirs(os.path.join(args.out, "images", str(c["class_id"])), exist_ok=True)
+        ids = [int(k) for k in c["colours"] if int(k) in palette]
+        weights = [c["colours"][str(k)] ** 0.5 for k in ids]   # flatten so rare colours still appear
+        rows = []
+        for n in range(args.per_class):
+            colour = palette[rng.choices(ids, weights=weights)[0]] if ids and rng.random() < 0.85 else rng.choice(common)
+            placed = [factory.place(c["part_num"], colour, (0, 0), rng)]
+            _, centre, radius = placed[0]
+            # Neighbours crowd the edges of the crop, as on a real table.
+            for _ in range(rng.choice([0, 0, 1, 2, 3])):
+                other = rng.choice(classes[:400])
+                angle = rng.uniform(0, math.tau)
+                try:
+                    gap = (radius + factory.radius.get(other["part_num"], 15)) * rng.uniform(1.0, 1.7)
+                    placed.append(factory.place(other["part_num"], rng.choice(common), (math.cos(angle) * gap, math.sin(angle) * gap), rng))
+                except FileNotFoundError:
+                    pass
+            randomise_environment(scene, table_mat, sun, rng)
+            aim_camera(camera, centre, radius, rng)
+            rel = os.path.join("images", str(c["class_id"]), f"{n:05d}.jpg")
+            scene.render.filepath = os.path.join(args.out, rel)
+            bpy.ops.render.render(write_still=True)
+            rows.append([rel, c["class_id"], c["part_num"], colour["id"]])
+            for obj, _, _ in placed:
+                mesh = obj.data
+                for mat in list(mesh.materials):
+                    bpy.data.materials.remove(mat)
+                bpy.data.objects.remove(obj)
+                bpy.data.meshes.remove(mesh)
+        with open(labels_path + ".tmp", "w", newline="") as f:
+            out = csv.writer(f)
+            out.writerow(["file", "class_id", "part_num", "color_id"])
+            out.writerows(rows)
+        os.replace(labels_path + ".tmp", labels_path)
+        print(f"class {c['class_id']} {c['part_num']}: {args.per_class} images", flush=True)
 
 
 if __name__ == "__main__":
