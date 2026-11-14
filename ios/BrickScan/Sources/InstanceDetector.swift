@@ -117,6 +117,7 @@ final class InstanceDetector {
                 let i = y * ow + x
                 if maps[i] <= pieceThreshold { continue }
                 let vx = Float(x) + maps[2 * plane + i], vy = Float(y) + maps[3 * plane + i]
+                if !vx.isFinite || !vy.isFinite { continue }
                 var best = -1
                 var bestDistance = Float.greatestFiniteMagnitude
                 let gx = min(gridW - 1, max(0, Int(vx) / cell)), gy = min(gridH - 1, max(0, Int(vy) / cell))
