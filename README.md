@@ -30,6 +30,26 @@ To use your phone's camera, start it with `HOST=0.0.0.0 npm start` and open `htt
 
 **What can I build?** Every set in the [Rebrickable](https://rebrickable.com/downloads/) catalog is ranked by how many of its pieces you have. Open a set to see exactly what is missing. Two options loosen the matching: ignore colour, and treat printed or re-moulded versions of a part as the same part.
 
+## iPhone app (Brick Scan)
+
+`ios/` holds a native app that replaces the photo step with a sweep: hold the phone flat over the table, move it slowly in rows, and every piece is found, measured, counted once and identified. It uses the server above for recognition, the inventory and the set matching, so the server must be running on your computer.
+
+1. Start the server so the phone can reach it: `HOST=0.0.0.0 npm start`.
+2. Open `ios/BrickScan.xcodeproj` in Xcode 16 or newer.
+3. Select the BrickScan target, then under Signing & Capabilities choose your team and change the bundle identifier to something unique.
+4. Plug in an iPhone running iOS 17 or newer, pick it as the run destination and press Run. The camera tracking does not work in the simulator.
+5. In the app's Settings tab, enter your computer's address and port (for example `192.168.1.20:3000`) and tap Test connection.
+
+How the sweep works (`ios/BrickScan/Sources/ScanEngine.swift`):
+
+- ARKit tracks the phone and finds the table, so each detected piece gets a real position and a size in millimetres.
+- A piece seen again at the same spot is the same piece, so overlapping passes do not double-count.
+- Each piece is sent for recognition from up to two viewpoints and the results are averaged. The measured length is sent too, so the server can tell a 1 x 2 from a 1 x 4.
+- White balance is locked once the table is in view so colours stay consistent across the sweep.
+- Frames are skipped while the phone is tilted or moving fast, because blurred or oblique views hurt accuracy.
+
+If Xcode will not open the project file, create a new iOS App project (SwiftUI) named BrickScan, delete its generated Swift files, drag in everything from `ios/BrickScan/Sources/`, and copy the four keys from `ios/BrickScan/Info.plist` into the target's Info tab.
+
 ## Good to know
 
 - Pieces must not touch each other, and the background needs to be a different colour from every piece on it. White pieces on white paper will be missed.

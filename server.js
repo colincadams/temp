@@ -5,6 +5,7 @@ const path = require('node:path');
 const { Catalog, ensureData } = require('./lib/catalog');
 const { InventoryStore } = require('./lib/store');
 const { hexToRgb } = require('./lib/color');
+const { rerankBySize } = require('./lib/size');
 
 const BRICKOGNIZE_URL = 'https://api.brickognize.com/predict/parts/';
 const MAX_BODY = 12 * 1024 * 1024;
@@ -85,7 +86,8 @@ function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'),
         seen.add(pi);
         candidates.push({ ...catalog.partInfo(pi, rgb), score: item.score });
       }
-      return { candidates, unmatched };
+      // Native clients measure the piece in millimetres; use that to separate same-shape, different-size parts.
+      return { candidates: rerankBySize(candidates, Number(sp.get('longMm'))), unmatched };
     }
 
     if (p === '/api/inventory' && m === 'GET') return inventoryView();
