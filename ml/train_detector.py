@@ -15,7 +15,7 @@ from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import v2 as T
 
-from detector import STRIDE, PieceNet, detector_loss, group_instances, match_instances, targets_from_ids
+from detector import STRIDE, PieceNet, detector_loss, group_instances, score_instances, targets_from_ids
 from model import MEAN, STD
 
 
@@ -30,7 +30,7 @@ class Scenes(Dataset):
 
     def __getitem__(self, i):
         image = Image.open(self.files[i]).convert("RGB")
-        ids = np.asarray(Image.open(self.files[i][:-4] + "_ids.png"))
+        ids = np.asarray(Image.open(self.files[i][:-4] + "_ids.png")).astype(np.int64)
         if self.train:
             image = self.blur(self.colour(image))
         image = np.array(image)
@@ -45,20 +45,20 @@ class Scenes(Dataset):
         ids = np.ascontiguousarray(ids[::STRIDE, ::STRIDE])
         piece, centre, offset = targets_from_ids(ids)
         tensor = (torch.from_numpy(np.ascontiguousarray(image)).permute(2, 0, 1).float() / 255 - torch.tensor(MEAN)[:, None, None]) / torch.tensor(STD)[:, None, None]
-        return tensor, torch.from_numpy(piece), torch.from_numpy(centre), torch.from_numpy(offset), torch.from_numpy(ids.astype(np.int64))
+        return tensor, torch.from_numpy(piece), torch.from_numpy(centre), torch.from_numpy(offset), torch.from_numpy(ids)
 
 
 @torch.no_grad()
 def evaluate(model, loader, device):
     model.eval()
-    hits = predicted = real = 0
+    totals = {}
     for images, _, _, _, ids in loader:
         out = model(images.to(device)).cpu()
         out[:, :2] = torch.sigmoid(out[:, :2])
         for maps, truth in zip(out.numpy(), ids.numpy()):
-            h, p, t = match_instances(group_instances(maps), truth)
-            hits, predicted, real = hits + h, predicted + p, real + t
-    return hits / max(real, 1), hits / max(predicted, 1)
+            for key, value in score_instances(group_instances(maps), truth).items():
+                totals[key] = totals.get(key, 0) + value
+    return totals
 
 
 def main():
@@ -103,15 +103,17 @@ def main():
             optimiser.step()
             schedule.step()
             running, steps = running + loss.item(), steps + 1
-        recall, precision = evaluate(model, val_loader, device)
+        t = evaluate(model, val_loader, device)
+        found, real = t["apart_found"] + t["touching_found"], t["apart_total"] + t["touching_total"]
+        recall, precision = found / max(real, 1), 1 - t["false"] / max(t["predicted"], 1)
         f1 = 2 * recall * precision / max(recall + precision, 1e-9)
-        print(f"epoch {epoch + 1}/{args.epochs}  loss {running / max(steps, 1):.3f}  pieces found {recall:.1%}  "
-              f"detections that are real pieces {precision:.1%}  F1 {f1:.3f}  {time.time() - started:.0f}s", flush=True)
+        print(f"epoch {epoch + 1}/{args.epochs}  loss {running / max(steps, 1):.3f}  found: apart {t['apart_found'] / max(t['apart_total'], 1):.1%}, "
+              f"touching {t['touching_found'] / max(t['touching_total'], 1):.1%}  false detections {1 - precision:.1%}  F1 {f1:.3f}  {time.time() - started:.0f}s", flush=True)
         if f1 > best:
             best = f1
             torch.save({"state": model.state_dict(), "encoder": args.encoder}, os.path.join(args.out, "best.pt"))
     print(f"best F1 {best:.3f}; saved {os.path.join(args.out, 'best.pt')}")
-    print("A piece counts as found when its predicted outline overlaps the true one by at least half. Held-out scenes are rendered too.")
+    print("A piece counts as found when its predicted outline overlaps the true one by at least half; pieces cut by the frame edge are not counted. Held-out scenes are rendered too.")
 
 
 if __name__ == "__main__":

@@ -182,7 +182,9 @@ def randomise_environment(scene, table_mat, sun, rng):
     background.inputs["Strength"].default_value = rng.uniform(0.3, 1.3)
     fill = rng.uniform(-0.08, 0.08)
     background.inputs["Color"].default_value = (1 + fill, 1, 1 - fill, 1)
-    scene.view_settings.exposure = rng.uniform(-0.7, 0.5)
+    # A phone exposes for the scene, so a bright table under strong light is not also over-exposed.
+    brightness = sun.data.energy / 4.5 + background.inputs["Strength"].default_value / 1.3
+    scene.view_settings.exposure = rng.uniform(-0.7, 0.4) - 0.5 * max(0.0, brightness - 1.0)
 
 
 def aim_camera(camera, centre, radius, rng):

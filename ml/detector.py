@@ -47,12 +47,14 @@ def detector_loss(out, piece, centre, offset):
 def targets_from_ids(ids: np.ndarray):
     """Training targets at output resolution from a piece-number map that is already at output resolution."""
     h, w = ids.shape
+    ids = ids.astype(np.int64)
     piece = (ids > 0).astype(np.float32)
     flat = ids.ravel()
-    count = np.bincount(flat, minlength=256).astype(np.float32)
+    size = int(ids.max()) + 1
+    count = np.bincount(flat, minlength=size).astype(np.float32)
     ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
-    cx = np.bincount(flat, weights=xs.ravel(), minlength=256) / np.maximum(count, 1)
-    cy = np.bincount(flat, weights=ys.ravel(), minlength=256) / np.maximum(count, 1)
+    cx = np.bincount(flat, weights=xs.ravel(), minlength=size) / np.maximum(count, 1)
+    cy = np.bincount(flat, weights=ys.ravel(), minlength=size) / np.maximum(count, 1)
     offset = np.stack([(cx[ids] - xs) * piece, (cy[ids] - ys) * piece]).astype(np.float32)
     centre = np.zeros((h, w), dtype=np.float32)
     for i in np.nonzero(count[1:])[0] + 1:
@@ -96,18 +98,50 @@ def group_instances(maps: np.ndarray, piece_threshold=0.5, peak_threshold=0.3, m
     return ids
 
 
-def match_instances(predicted: np.ndarray, truth: np.ndarray, iou_threshold=0.5):
-    """(pieces found correctly, pieces predicted, pieces really there)."""
-    p_ids, t_ids = np.unique(predicted[predicted > 0]), np.unique(truth[truth > 0])
-    if not len(p_ids) or not len(t_ids):
-        return 0, len(p_ids), len(t_ids)
-    pair = predicted.astype(np.int64) * 256 + truth
-    inter = np.bincount(pair.ravel(), minlength=(int(predicted.max()) + 1) * 256).reshape(-1, 256)
-    p_area, t_area = np.bincount(predicted.ravel()), np.bincount(truth.ravel(), minlength=256)
-    hits = 0
-    for t in t_ids:
-        overlap = inter[1:, t]
-        best = int(np.argmax(overlap)) + 1
-        if overlap[best - 1] / (p_area[best] + t_area[t] - overlap[best - 1]) >= iou_threshold:
-            hits += 1
-    return hits, len(p_ids), len(t_ids)
+def _on_border(ids, size):
+    edge = np.concatenate([ids[0], ids[-1], ids[:, 0], ids[:, -1]])
+    out = np.zeros(size, dtype=bool)
+    out[edge] = True
+    return out
+
+
+def score_instances(predicted: np.ndarray, truth: np.ndarray, iou_threshold=0.5):
+    """Compare predicted pieces with the true ones, the way the app experiences them.
+
+    A piece counts as found when a predicted outline overlaps it by at least half (intersection over union).
+    Pieces cut by the frame edge are left out on both sides, because the app ignores those and waits for a
+    frame showing the whole piece. Returns counts: found/total for pieces standing apart and for pieces
+    touching a neighbour, plus how many predictions matched nothing.
+    """
+    predicted, truth = predicted.astype(np.int64), truth.astype(np.int64)
+    np_, nt = int(predicted.max()) + 1, int(truth.max()) + 1
+    inter = np.bincount((predicted * nt + truth).ravel(), minlength=np_ * nt).reshape(np_, nt)
+    p_area, t_area = inter.sum(axis=1), inter.sum(axis=0)
+    p_border, t_border = _on_border(predicted, np_), _on_border(truth, nt)
+
+    # A true piece touches a neighbour if any of its pixels sits next to a different piece.
+    touching = np.zeros(nt, dtype=bool)
+    for a, b in ((truth[:, :-1], truth[:, 1:]), (truth[:-1], truth[1:])):
+        differ = (a != b) & (a > 0) & (b > 0)
+        touching[a[differ]] = True
+        touching[b[differ]] = True
+
+    out = {"apart_found": 0, "apart_total": 0, "touching_found": 0, "touching_total": 0, "false": 0, "predicted": 0}
+    matched = np.zeros(np_, dtype=bool)
+    for t in range(1, nt):
+        if t_area[t] == 0:
+            continue
+        best = int(np.argmax(inter[1:, t])) + 1 if np_ > 1 else 0
+        hit = best > 0 and inter[best, t] / (p_area[best] + t_area[t] - inter[best, t]) >= iou_threshold
+        if hit:
+            matched[best] = True
+        if t_border[t]:
+            continue
+        kind = "touching" if touching[t] else "apart"
+        out[kind + "_total"] += 1
+        out[kind + "_found"] += int(hit)
+    for p in range(1, np_):
+        if p_area[p] and not p_border[p]:
+            out["predicted"] += 1
+            out["false"] += int(not matched[p])
+    return out

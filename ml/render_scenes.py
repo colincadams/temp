@@ -5,7 +5,7 @@ colour threshold merges into one blob.
 
     python ml/render_scenes.py --ldraw ml/ldraw --scenes 3000
 
-Each scene writes NNNNN.jpg (the picture) and NNNNN_ids.png (0 = table, 1..n = piece number).
+Each scene writes NNNNN.jpg (the picture) and NNNNN_ids.png (16-bit: 0 = table, 1..n = piece number).
 Finished scenes are skipped, so an interrupted run can be restarted.
 """
 import argparse
@@ -24,8 +24,8 @@ from PIL import Image
 from ldraw import LDrawLibrary
 from render import PartFactory, randomise_environment, setup_scene, srgb_to_linear
 
-MAX_PIECES = 120          # ids are encoded as 5 levels per colour channel: 5**3 - 1 = 124 distinct values
-LEVELS = 5
+LEVELS = 8                # ids are encoded as 8 levels per colour channel: 8**3 - 1 = 511 distinct values
+MAX_PIECES = 450
 
 
 def overlaps(a, b, gap=0.0):
@@ -42,29 +42,35 @@ def overlaps(a, b, gap=0.0):
 
 def lay_out(factory, classes, palette, common, half_w, half_h, rng):
     """Choose parts, poses and positions for one table. Returns [(part_num, colour, pose, x, y)]."""
-    placed = []   # (outline in table coordinates, centre, radius, yaw, colour)
+    outlines, yaws, colours = [], [], []
+    centres, radii = np.zeros((MAX_PIECES, 2)), np.zeros(MAX_PIECES)
     result = []
 
-    def free(outline, centre, radius, gap=0.0):
-        return not any(np.hypot(*(centre - c)) < radius + r + 1 and overlaps(outline, o, gap) for o, c, r, _, _ in placed)
+    def free(outline, centre, radius):
+        n = len(outlines)
+        near = np.nonzero(np.hypot(centres[:n, 0] - centre[0], centres[:n, 1] - centre[1]) < radii[:n] + radius + 1)[0]
+        return not any(overlaps(outline, outlines[i]) for i in near)
 
+    # From a few scattered pieces to a table covered edge to edge.
+    density = rng.random()
+    target = rng.randint(8, 80) if density < 0.2 else rng.randint(80, 220) if density < 0.5 else rng.randint(220, MAX_PIECES)
+    touch_share = rng.uniform(0.5, 0.9)
     weights = [c["usage"] ** 0.5 for c in classes]
-    target = rng.randint(8, MAX_PIECES)
     attempts = 0
-    while len(result) < target and attempts < target * 12:
+    while len(result) < target and attempts < target * 8:
         attempts += 1
         part = rng.choices(classes, weights=weights)[0]
         ids = [int(k) for k in part["colours"] if int(k) in palette]
         colour = palette[rng.choice(ids)] if ids and rng.random() < 0.8 else rng.choice(common)
-        mode = rng.random()
         try:
-            if placed and mode < 0.65:
+            if outlines and rng.random() < touch_share:
                 # Slide the new piece up against one already on the table.
-                _, t_centre, t_radius, t_yaw, t_colour = rng.choice(placed)
-                aligned = mode < 0.3   # flush side by side, the hardest case, often in the same colour
+                t = rng.randrange(len(outlines))
+                t_centre, t_radius, t_yaw = centres[t], radii[t], yaws[t]
+                aligned = rng.random() < 0.45   # flush side by side, the hardest case, often in the same colour
                 yaw = t_yaw + rng.choice([0, math.pi / 2]) if aligned else None
                 if aligned and rng.random() < 0.6:
-                    colour = t_colour
+                    colour = colours[t]
                 pose, outline = factory.resting_pose(part["part_num"], rng, yaw)
                 radius = float(np.linalg.norm(outline - outline.mean(axis=0), axis=1).max())
                 angle = t_yaw + rng.choice([0, 1, 2, 3]) * math.pi / 2 if aligned else rng.uniform(0, math.tau)
@@ -73,7 +79,7 @@ def lay_out(factory, classes, palette, common, half_w, half_h, rng):
                 lo, hi = 0.0, t_radius + radius + 3
                 if not free(outline + start + direction * hi, t_centre + direction * hi, radius):
                     continue
-                for _ in range(14):   # smallest slide distance that clears everything
+                for _ in range(12):   # smallest slide distance that clears everything
                     mid = (lo + hi) / 2
                     if free(outline + start + direction * mid, t_centre + direction * mid, radius):
                         hi = mid
@@ -92,7 +98,9 @@ def lay_out(factory, classes, palette, common, half_w, half_h, rng):
         centre = moved.mean(axis=0)
         if abs(centre[0]) > half_w * 1.15 or abs(centre[1]) > half_h * 1.15 or not free(moved, centre, radius):
             continue
-        placed.append((moved, centre, radius, yaw_used, colour))
+        n = len(outlines)
+        outlines.append(moved); yaws.append(yaw_used); colours.append(colour)
+        centres[n], radii[n] = centre, radius
         result.append((part["part_num"], colour, pose, float(offset[0]), float(offset[1])))
     return result
 
@@ -113,7 +121,7 @@ def id_material(index):
 def decode_ids(path):
     px = np.asarray(Image.open(path).convert("RGB")).astype(np.float32)
     digits = np.rint(px / 255 * (LEVELS - 1)).astype(np.int32)
-    return (digits[..., 0] + digits[..., 1] * LEVELS + digits[..., 2] * LEVELS ** 2).astype(np.uint8)
+    return (digits[..., 0] + digits[..., 1] * LEVELS + digits[..., 2] * LEVELS ** 2).astype(np.uint16)
 
 
 def main():
@@ -162,9 +170,9 @@ def main():
         camera.data.angle = fov
         camera.data.clip_start, camera.data.clip_end = 1, 5000
 
-        reach = max(half_w, half_h) * 1.1   # the table is covered beyond the frame, so pieces are cut by its edges
+        # The table is covered a little beyond the frame, so pieces are cut by its edges.
         objects = [factory.place(part, colour, (x, y), rng, pose)[0]
-                   for part, colour, pose, x, y in lay_out(factory, classes, palette, common, reach, reach, rng)]
+                   for part, colour, pose, x, y in lay_out(factory, classes, palette, common, half_w * 1.08, half_h * 1.12, rng)]
 
         randomise_environment(scene, table_mat, sun, rng)
         scene.cycles.samples = args.samples
