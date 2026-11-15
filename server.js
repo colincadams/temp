@@ -142,9 +142,10 @@ function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'),
       const body = await readJson(req);
       const items = (Array.isArray(body.items) ? body.items.map(validItem) : [validItem(body)]).filter((it) => it.qty > 0);
       if (!items.length) throw bad('Nothing to add');
-      const batch = store.addBatch(items, body.source);
-      store.save();
-      return { ...inventoryView(), batchId: batch.id };
+      const clientId = typeof body.clientId === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(body.clientId) ? body.clientId : undefined;
+      const batch = store.addBatch(items, body.source, clientId);
+      if (!batch.repeated) store.save();
+      return { ...inventoryView(), batchId: batch.id, ...(batch.repeated ? { repeated: true } : {}) };
     }
 
     if (p === '/api/inventory/import' && m === 'POST') {

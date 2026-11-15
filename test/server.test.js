@@ -76,3 +76,17 @@ test('corrections save the crop under the right part number', async () => {
     assert.equal((await fetch(`${base}/api/corrections?partNum=../../etc`, { method: 'POST', body: Buffer.alloc(500) })).status, 400);
   } finally { server.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('a save repeated with the same client id is added only once', () => withServer(async (base) => {
+  const body = { source: 'scan', clientId: '3F2504E0-4F89-11D3-9A0C-0305E82C3301', items: [{ partNum: '3001', colorId: 4, qty: 2 }] };
+  const first = await post(`${base}/api/inventory/add`, body);
+  const again = await post(`${base}/api/inventory/add`, body);
+  assert.equal(first.pieces, 2);
+  assert.equal(again.pieces, 2);
+  assert.equal(again.repeated, true);
+  assert.equal(again.batchId, first.batchId);
+  const other = await post(`${base}/api/inventory/add`, { ...body, clientId: '3F2504E0-4F89-11D3-9A0C-0305E82C3302' });
+  assert.equal(other.pieces, 4);
+  const plain = await post(`${base}/api/inventory/add`, { items: body.items });
+  assert.equal(plain.pieces, 6);   // no id: every save is added
+}));

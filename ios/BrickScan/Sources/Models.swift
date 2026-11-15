@@ -184,6 +184,8 @@ struct NewItems: Codable {
     let items: [NewItem]
     /// Where the items came from, e.g. "scan". Left out of the JSON when nil.
     var source: String?
+    /// Identifies this save, so a retry after a lost reply is not added twice. Left out of the JSON when nil.
+    var clientId: String?
 }
 
 // MARK: - Scan state shown in the UI

@@ -103,6 +103,8 @@ struct ReviewView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var groups: [ReviewGroup]
     @State private var saving = false
+    /// One id for this review's save, whether it reaches the server now or is kept on the phone and retried later.
+    @State private var saveID = UUID()
     @State private var error: String?
     @State private var showConfident = false
     @State private var confirmRepeat = false
@@ -307,7 +309,7 @@ struct ReviewView: View {
 
     /// The computer cannot be reached: keep the scan on the phone and say so. False if there is nowhere to keep it.
     private func keepOnPhone() -> Bool {
-        guard let pending, pending.add(itemsToKeep(), source: "scan") else { return false }
+        guard let pending, pending.add(itemsToKeep(), source: "scan", id: saveID) else { return false }
         let what = total == 1 ? "this piece is" : "these \(total) pieces are"
         keptMessage = "Your computer can't be reached right now, so \(what) kept on this phone. "
             + "\(total == 1 ? "It" : "They") will be added to your inventory as soon as the computer is reachable. "
@@ -360,7 +362,7 @@ struct ReviewView: View {
                 }
             }
             do {
-                _ = try await service.add(items, source: "scan")
+                _ = try await service.add(items, source: "scan", clientId: saveID.uuidString)
             } catch {
                 // Corrections are dropped in this case, as when they fail to send.
                 if APIError.isUnreachable(error), keepOnPhone() { return }

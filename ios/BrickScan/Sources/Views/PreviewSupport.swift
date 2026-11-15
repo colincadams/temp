@@ -116,7 +116,7 @@ struct PreviewService: BrickService {
         "Part,Color,Quantity\n3001,4,12\n3003,14,7\n3023,71,30\n"
     }
 
-    func add(_ items: [NewItem], source: String) async throws -> InventoryResponse {
+    func add(_ items: [NewItem], source: String, clientId: String) async throws -> InventoryResponse {
         SampleData.inventory
     }
 

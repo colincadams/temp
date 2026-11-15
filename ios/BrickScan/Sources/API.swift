@@ -127,8 +127,9 @@ final class API {
 
     func inventoryCSV() async throws -> String { try await text("api/inventory.csv") }
 
-    func add(_ items: [NewItem], source: String) async throws -> InventoryResponse {
-        try await request("api/inventory/add", method: "POST", body: try json(NewItems(items: items, source: source)), contentType: "application/json")
+    func add(_ items: [NewItem], source: String, clientId: String) async throws -> InventoryResponse {
+        let body = NewItems(items: items, source: source, clientId: clientId)
+        return try await request("api/inventory/add", method: "POST", body: try json(body), contentType: "application/json")
     }
 
     func setQuantity(partNum: String, colorId: Int, qty: Int) async throws -> InventoryResponse {
@@ -206,7 +207,8 @@ final class API {
 protocol BrickService {
     func inventory() async throws -> InventoryResponse
     func inventoryCSV() async throws -> String
-    func add(_ items: [NewItem], source: String) async throws -> InventoryResponse
+    /// `clientId` identifies the save: the server ignores a second save with the same id.
+    func add(_ items: [NewItem], source: String, clientId: String) async throws -> InventoryResponse
     func setQuantity(partNum: String, colorId: Int, qty: Int) async throws -> InventoryResponse
     func batches() async throws -> [BatchInfo]
     func undoBatch(id: String) async throws -> InventoryResponse

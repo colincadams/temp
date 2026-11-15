@@ -41,9 +41,10 @@ final class PendingScans: ObservableObject, @unchecked Sendable {
     var pieces: Int { queue.pieces }
 
     /// Keep a scan to send later. Returns false if there was nothing to keep.
+    /// - Parameter id: the save's id, kept so a retry the server already received is not added twice.
     @discardableResult
-    func add(_ items: [PendingItem], source: String) -> Bool {
-        guard queue.add(items: items, source: source, at: Date()) != nil else { return false }
+    func add(_ items: [PendingItem], source: String, id: UUID = UUID()) -> Bool {
+        guard queue.add(items: items, source: source, at: Date(), id: id) != nil else { return false }
         changed()
         return true
     }
@@ -76,7 +77,7 @@ final class PendingScans: ObservableObject, @unchecked Sendable {
                 }
                 let outcome: PendingScanQueue.Outcome
                 do {
-                    _ = try await service.add(newItems, source: scan.source)
+                    _ = try await service.add(newItems, source: scan.source, clientId: scan.id.uuidString)
                     outcome = .added
                 } catch {
                     let message = error.localizedDescription
