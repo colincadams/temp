@@ -9,6 +9,8 @@ let package = Package(
     ],
     targets: [
         .target(name: "BrickCore"),
+        // Plays a rendered sweep (ml/render_sweep.py) through the scan pipeline and scores it: `swift run brick-replay <folder>`.
+        .executableTarget(name: "brick-replay", dependencies: ["BrickCore"], path: "Sources/BrickReplay"),
         .testTarget(name: "BrickCoreTests", dependencies: ["BrickCore"]),
     ]
 )
