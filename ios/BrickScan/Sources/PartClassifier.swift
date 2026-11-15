@@ -1,18 +1,10 @@
+import BrickCore
 import CoreImage
 import CoreML
 import CoreVideo
 import Foundation
 
-/// One shape the model knows, as written by `ml/export.py`.
-struct ShapeClass: Codable {
-    let partNum: String
-    let name: String
-    /// Every catalog part number with this shape (prints and mould variants).
-    let members: [String]
-    /// Bounding-box extents in millimetres, largest first.
-    let sizeMm: [Float]
-}
-
+/// The class list written by `ml/export.py`. `ShapeClass` is defined in BrickCore.
 private struct ClassFile: Codable {
     let imageSize: Int
     let classes: [ShapeClass]
@@ -53,7 +45,7 @@ final class PartClassifier {
         self.input = buffer
     }
 
-    /// Log-probability of each shape for one square crop of a piece. Add these across views to fuse them.
+    /// Log-probability of each shape for one square crop of a piece. `ShapeFusion.fuse` combines them across views.
     func classify(_ crop: CIImage) -> [Float]? {
         let extent = crop.extent
         guard extent.width > 1, extent.height > 1 else { return nil }
@@ -70,32 +62,6 @@ final class PartClassifier {
 
         var logits = [Float](repeating: 0, count: classes.count)
         for i in 0..<logits.count { logits[i] = similarity[i].floatValue * similarityScale }
-        return PartClassifier.logSoftmax(logits)
-    }
-
-    /// How well each shape's true dimensions fit a measured footprint, as a log-likelihood.
-    ///
-    /// A crop is resized before recognition, so the image alone cannot tell a 1 x 2 plate from a 1 x 4.
-    /// A piece can rest on any face, so the footprint is compared with each pair of the shape's three extents.
-    func sizeLogPrior(longMm: Float, shortMm: Float) -> [Float] {
-        classes.map { shape in
-            guard shape.sizeMm.count == 3, longMm > 0 else { return 0 }
-            let a = shape.sizeMm[0], b = shape.sizeMm[1], c = shape.sizeMm[2]
-            var best: Float = -.infinity
-            for (long, short) in [(a, b), (a, c), (b, c)] {
-                let sl = max(3, 0.15 * long), ss = max(3, 0.2 * short)
-                let dl = (longMm - long) / sl, ds = (shortMm - short) / ss
-                best = max(best, -0.5 * (dl * dl + 0.5 * ds * ds))   // the short side is measured less reliably
-            }
-            return max(best, -6)   // never rule a shape out on size alone
-        }
-    }
-
-    static func logSoftmax(_ values: [Float]) -> [Float] {
-        guard let peak = values.max() else { return [] }
-        var sum: Float = 0
-        for v in values { sum += exp(v - peak) }
-        let offset = peak + log(sum)
-        return values.map { $0 - offset }
+        return ShapeFusion.logSoftmax(logits)
     }
 }

@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		B50000000000000000000013 /* BrickCore in Frameworks */ = {isa = PBXBuildFile; productRef = B50000000000000000000012 /* BrickCore */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		B50000000000000000000001 /* BrickScan.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BrickScan.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B50000000000000000000002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = BrickScan/Info.plist; sourceTree = "<group>"; };
@@ -25,6 +29,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B50000000000000000000013 /* BrickCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -68,6 +73,7 @@
 			);
 			name = BrickScan;
 			packageProductDependencies = (
+				B50000000000000000000012 /* BrickCore */,
 			);
 			productName = BrickScan;
 			productReference = B50000000000000000000001 /* BrickScan.app */;
@@ -97,6 +103,9 @@
 			);
 			mainGroup = B50000000000000000000005;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				B50000000000000000000011 /* XCLocalSwiftPackageReference "BrickCore" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B50000000000000000000006 /* Products */;
 			projectDirPath = "";
@@ -238,6 +247,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		B50000000000000000000011 /* XCLocalSwiftPackageReference "BrickCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = BrickCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B50000000000000000000012 /* BrickCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BrickCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = B5000000000000000000000A /* Project object */;
 }

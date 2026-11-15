@@ -1,22 +1,31 @@
 import Foundation
 
 /// One object found lying on the table, in work-image pixel coordinates.
-struct DetectedBlob {
-    var minX: Int
-    var minY: Int
-    var maxX: Int
-    var maxY: Int
-    var area: Int
+public struct DetectedBlob: Equatable {
+    public var minX: Int
+    public var minY: Int
+    public var maxX: Int
+    public var maxY: Int
+    public var area: Int
     /// Centroid.
-    var cx: Float
-    var cy: Float
+    public var cx: Float
+    public var cy: Float
     /// Length of the long and short side of the best-fit rectangle, in pixels.
-    var major: Float
-    var minor: Float
+    public var major: Float
+    public var minor: Float
     /// Median colour of the object's pixels.
-    var r: UInt8
-    var g: UInt8
-    var b: UInt8
+    public var r: UInt8
+    public var g: UInt8
+    public var b: UInt8
+
+    public init(minX: Int, minY: Int, maxX: Int, maxY: Int, area: Int, cx: Float, cy: Float,
+                major: Float, minor: Float, r: UInt8, g: UInt8, b: UInt8) {
+        self.minX = minX; self.minY = minY; self.maxX = maxX; self.maxY = maxY
+        self.area = area
+        self.cx = cx; self.cy = cy
+        self.major = major; self.minor = minor
+        self.r = r; self.g = g; self.b = b
+    }
 }
 
 /// Finds separate pieces on a plain surface.
@@ -24,7 +33,7 @@ struct DetectedBlob {
 /// Same method as `public/segment.js` in the web app, with two changes for a moving camera:
 /// the background colour is the median of the whole frame (pieces cross the frame edges during a sweep),
 /// and blobs cut off by the frame edge are dropped so only fully visible pieces are reported.
-enum PieceDetector {
+public enum PieceDetector {
     private static let linear: [Float] = (0..<256).map { i in
         let c = Float(i) / 255
         return c <= 0.04045 ? c / 12.92 : powf((c + 0.055) / 1.055, 2.4)
@@ -81,7 +90,7 @@ enum PieceDetector {
     /// - Parameters:
     ///   - rgba: `width * height * 4` bytes, rows top to bottom.
     ///   - sensitivity: 0…1; higher finds pieces closer in colour to the table.
-    static func detect(rgba: [UInt8], width w: Int, height h: Int, sensitivity: Float = 0.5) -> [DetectedBlob] {
+    public static func detect(rgba: [UInt8], width w: Int, height h: Int, sensitivity: Float = 0.5) -> [DetectedBlob] {
         let n = w * h
         guard n > 0, rgba.count >= n * 4 else { return [] }
 
