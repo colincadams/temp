@@ -20,21 +20,21 @@ To use your phone's camera, start it with `HOST=0.0.0.0 npm start` and open `htt
 | `HOST` | `127.0.0.1` | Address to listen on |
 | `DATA_DIR` | `./data` | Where the catalog and your inventory are kept |
 
-`npm run update-data` re-downloads the catalog to pick up new sets. `npm test` runs the unit tests.
+The catalog is kept current by itself: if it is more than 14 days old when the server starts, a fresh copy is downloaded in the background and swapped in without a restart (if the download fails, the old one stays in use). `npm run update-data` re-downloads it straight away. `npm test` runs the unit tests.
 
 ## How it works
 
 **Scan.** Spread pieces on a plain surface and take a photo. The browser finds each separate piece (`public/segment.js`: background estimation, thresholding, connected components), and each crop is sent to the [Brickognize](https://brickognize.com) recognition service to name the part. The piece's colour is measured from the photo and matched against the colours that part is actually made in. You review every match before anything is saved.
 
-**Inventory.** Adjust counts, add parts by name or number, add every part of a set you own by its set number, or export a CSV (`Part,Color,Quantity`, which Rebrickable can import). Every addition is listed under Recent additions and can be undone.
+**Inventory.** Adjust counts, add parts by name or number, add every part of a set you own by its set number, or export a CSV (`Part,Color,Quantity`, which Rebrickable can import). Import CSV reads a file in that same format and tells you how many rows it had to skip because the part, colour or quantity was not recognised. If a photo scan looks like one you have already added, you are asked before it is added again. Every addition is listed under Recent additions and can be undone.
 
-**What can I build?** Every set in the [Rebrickable](https://rebrickable.com/downloads/) catalog is ranked by how many of its pieces you have. Sort by most complete or by fewest missing pieces. Open a set to see exactly what is missing and export that list. Two options loosen the matching: ignore colour, and treat printed or re-moulded versions of a part as the same part.
+**What can I build?** Every set in the [Rebrickable](https://rebrickable.com/downloads/) catalog is ranked by how many of its pieces you have. Sort by most complete or by fewest missing pieces, and narrow the list to a range of years. Tap the star on a set to make it a favourite, and tick Favourites only to see just those; favourites are kept when you clear the inventory. Open a set to see exactly what is missing and export that list. Two options loosen the matching: ignore colour, and treat printed or re-moulded versions of a part as the same part.
 
 ## iPhone app (Brick Scan)
 
 `ios/` holds a native app that replaces the photo step with a sweep: hold the phone flat over the table, move it slowly in rows, and every piece is found, measured, counted once and identified. It uses the server above for recognition, the inventory and the set matching, so the server must be running on your computer.
 
-1. Start the server so the phone can reach it: `HOST=0.0.0.0 npm start`.
+1. Start the server so the phone can reach it: `HOST=0.0.0.0 npm start`. Started this way, the server announces itself on your network (a Bonjour service named "Brick Inventory", type `_brickinventory._tcp`) so the app can find it without an address. This uses `dns-sd` on a Mac and `avahi-publish` on Linux if it is installed; the server says at startup whether it is being advertised.
 2. Open `ios/BrickScan.xcodeproj` in Xcode 16 or newer.
 3. Select the BrickScan target, then under Signing & Capabilities choose your team and change the bundle identifier to something unique.
 4. Plug in an iPhone running iOS 17 or newer, pick it as the run destination and press Run. The camera tracking does not work in the simulator.
@@ -58,7 +58,7 @@ If Xcode will not open the project file, create a new iOS App project (SwiftUI) 
 - Photos of your pieces are sent to Brickognize, a free third-party service. Nothing else leaves your computer.
 - Brickognize uses BrickLink part numbers. Most are the same as Rebrickable's, but a piece whose number differs is reported as "no match" and has to be added by hand.
 - Minifigures and spare parts are not counted towards a set.
-- Your inventory lives in `data/inventory.json`.
+- Your inventory and your favourite sets live in `data/inventory.json`.
 - When the phone app sends a correction, the crop is saved under `data/corrections/<part number>/`, the layout the training scripts read.
 - The plan for what comes next is in `docs/PLAN.md`.
 
