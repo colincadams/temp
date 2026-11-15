@@ -1,7 +1,9 @@
 import ARKit
+import AVFoundation
 import Combine
 import SceneKit
 import SwiftUI
+import UIKit
 
 /// Live camera view with a dot floating over every piece found so far.
 struct ARScanView: UIViewRepresentable {
@@ -65,21 +67,83 @@ struct ARScanView: UIViewRepresentable {
 
 struct ScanView: View {
     @EnvironmentObject private var engine: ScanEngine
-    @AppStorage(API.serverKey) private var serverURL = ""
+    @EnvironmentObject private var discovery: ServerDiscovery
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage(IntroView.shownKey) private var introShown = false
     @State private var reviewing = false
+    @State private var visible = false
+    @State private var camera: AVAuthorizationStatus = AVCaptureDevice.authorizationStatus(for: .video)
+    /// Switches to the Settings tab.
+    let openSettings: () -> Void
+
+    init(openSettings: @escaping () -> Void) {
+        self.openSettings = openSettings
+    }
 
     private var identified: Int { engine.pieces.filter { $0.state == .identified }.count }
+    private var cameraBlocked: Bool { camera == .denied || camera == .restricted }
+
+    /// True when the app knows it has no server: it is looking for one, or has given up.
+    private var serverMissing: Bool {
+        discovery.state == .searching || discovery.state == .notFound
+    }
 
     var body: some View {
+        Group {
+            if cameraBlocked {
+                CameraDeniedView()
+            } else {
+                scanner
+            }
+        }
+        .onAppear {
+            visible = true
+            camera = AVCaptureDevice.authorizationStatus(for: .video)
+            startIfAllowed()
+        }
+        .onDisappear {
+            visible = false
+            engine.pause()
+        }
+        .onChange(of: scenePhase) { (_: ScenePhase, newPhase: ScenePhase) in
+            // Coming back from the Settings app, or from the camera permission prompt.
+            guard newPhase == .active else { return }
+            let wasBlocked = cameraBlocked
+            camera = AVCaptureDevice.authorizationStatus(for: .video)
+            if cameraBlocked {
+                engine.pause()
+            } else if wasBlocked && visible {
+                startIfAllowed()
+            }
+        }
+        .onChange(of: introShown) { (_: Bool, _: Bool) in
+            if visible { startIfAllowed() }
+        }
+        .sheet(isPresented: $reviewing) {
+            ReviewView(pieces: engine.pieces, service: API.shared) { engine.reset() }
+        }
+    }
+
+    /// The camera starts only after the introduction, so its permission prompt is not the first thing shown.
+    private func startIfAllowed() {
+        let status = AVCaptureDevice.authorizationStatus(for: .video)
+        if introShown && status != .denied && status != .restricted { engine.start() }
+    }
+
+    private var scanner: some View {
         ZStack {
             ARScanView(engine: engine).ignoresSafeArea(edges: .top)
 
             VStack(spacing: 8) {
-                Text(serverURL.isEmpty ? "Set the server address in Settings to identify pieces" : engine.hint)
-                    .font(.subheadline.weight(.medium))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
+                if serverMissing {
+                    ServerMissingBanner(searching: discovery.state == .searching, openSettings: openSettings)
+                } else {
+                    Text(engine.hint)
+                        .font(.subheadline.weight(.medium))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
                 if let error = engine.lastError {
                     Text(error)
                         .font(.caption)
@@ -95,7 +159,7 @@ struct ScanView: View {
                     } label: {
                         Image(systemName: engine.torchOn ? "flashlight.on.fill" : "flashlight.off.fill").frame(width: 24, height: 24)
                     }
-                    .accessibilityLabel("Light")
+                    .accessibilityLabel(engine.torchOn ? "Turn the light off" : "Turn the light on")
 
                     Button("Start over") { engine.reset() }
                         .disabled(engine.pieces.isEmpty)
@@ -103,9 +167,10 @@ struct ScanView: View {
                     Spacer()
 
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text("\(engine.pieces.count) pieces").font(.headline)
+                        Text(BatchText.pieces(engine.pieces.count)).font(.headline)
                         Text("\(identified) identified").font(.caption)
                     }
+                    .accessibilityElement(children: .combine)
 
                     Button("Review") { reviewing = true }
                         .buttonStyle(.borderedProminent)
@@ -117,10 +182,69 @@ struct ScanView: View {
             }
             .padding()
         }
-        .onAppear { engine.start() }
-        .onDisappear { engine.pause() }
-        .sheet(isPresented: $reviewing) {
-            ReviewView(pieces: engine.pieces) { engine.reset() }
+    }
+}
+
+/// Shown over the camera when there is no server to name the pieces.
+private struct ServerMissingBanner: View {
+    let searching: Bool
+    let openSettings: () -> Void
+
+    var body: some View {
+        let title: String = searching ? "Looking for the server on this network…" : "Not connected to the server"
+        let symbol: String = searching ? "wifi" : "wifi.slash"
+        VStack(spacing: 8) {
+            Label(title, systemImage: symbol)
+                .font(.subheadline.weight(.semibold))
+            if !searching {
+                Text("Pieces cannot be identified without it. Start Brick Inventory on your computer and keep the phone on the same Wi-Fi.")
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                Button("Open Settings", action: openSettings)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+/// Shown instead of the camera when the app is not allowed to use it.
+private struct CameraDeniedView: View {
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                Image(systemName: "camera.fill")
+                    .font(.largeTitle)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Text("Brick Scan needs the camera")
+                    .font(.title2.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                Text("The camera is how the app finds and identifies your pieces. Allow camera access for Brick Scan in Settings, then come back.")
+                    .font(.body)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(32)
+            .frame(maxWidth: .infinity)
         }
     }
 }
+
+#if DEBUG
+#Preview("Camera not allowed") {
+    CameraDeniedView()
+}
+
+#Preview("Server not found") {
+    ServerMissingBanner(searching: false, openSettings: { })
+        .padding()
+}
+#endif

@@ -19,18 +19,38 @@ final class API {
 
     var isConfigured: Bool { baseURL != nil }
 
-    private var baseURL: URL? {
-        var text = (UserDefaults.standard.string(forKey: API.serverKey) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Turns what the user typed ("192.168.1.20:3000") into a base address.
+    static func url(from address: String) -> URL? {
+        var text = address.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { return nil }
         if !text.contains("://") { text = "http://" + text }
         while text.hasSuffix("/") { text.removeLast() }
         return URL(string: text)
     }
 
-    private func request<T: Decodable>(_ path: String, query: [URLQueryItem] = [], method: String = "GET",
-                                       body: Data? = nil, contentType: String? = nil) async throws -> T {
+    /// True when a Brick Inventory server answers at `address`. Used to check a saved or discovered address.
+    static func reachable(address: String) async -> Bool {
+        guard let base = url(from: address) else { return false }
+        var req = URLRequest(url: base.appendingPathComponent("api/meta"))
+        req.timeoutInterval = 5
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return false }
+            return (try? JSONDecoder().decode(MetaResponse.self, from: data)) != nil
+        } catch {
+            return false
+        }
+    }
+
+    private var baseURL: URL? {
+        API.url(from: UserDefaults.standard.string(forKey: API.serverKey) ?? "")
+    }
+
+    /// Sends a request and returns the raw body of a successful reply.
+    private func send(_ path: String, query: [URLQueryItem] = [], method: String = "GET",
+                      body: Data? = nil, contentType: String? = nil) async throws -> Data {
         guard let base = baseURL, var parts = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false) else {
-            throw APIError(message: "Set the server address in Settings first.")
+            throw APIError(message: "The app is not connected to the server yet. Check Settings.")
         }
         if !query.isEmpty { parts.queryItems = query }
         guard let url = parts.url else { throw APIError(message: "The server address is not valid.") }
@@ -44,18 +64,30 @@ final class API {
         do {
             (data, response) = try await session.data(for: req)
         } catch {
-            throw APIError(message: "Can't reach the server at \(base.absoluteString). Is it running with HOST=0.0.0.0, and is the phone on the same Wi-Fi?")
+            throw APIError(message: "Can't reach the server at \(base.absoluteString). Is it running, and is the phone on the same Wi-Fi?")
         }
         guard let http = response as? HTTPURLResponse else { throw APIError(message: "Unexpected response from the server.") }
         guard (200..<300).contains(http.statusCode) else {
             let message = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
             throw APIError(message: message ?? "The server returned an error (\(http.statusCode)).")
         }
+        return data
+    }
+
+    private func request<T: Decodable>(_ path: String, query: [URLQueryItem] = [], method: String = "GET",
+                                       body: Data? = nil, contentType: String? = nil) async throws -> T {
+        let data = try await send(path, query: query, method: method, body: body, contentType: contentType)
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
             throw APIError(message: "Could not read the server's reply.")
         }
+    }
+
+    private func text(_ path: String, query: [URLQueryItem] = []) async throws -> String {
+        let data = try await send(path, query: query)
+        guard let text = String(data: data, encoding: .utf8) else { throw APIError(message: "Could not read the server's reply.") }
+        return text
     }
 
     private func json<B: Encodable>(_ value: B) throws -> Data { try JSONEncoder().encode(value) }
@@ -83,22 +115,60 @@ final class API {
 
     func inventory() async throws -> InventoryResponse { try await request("api/inventory") }
 
-    func add(_ items: [NewItem]) async throws -> InventoryResponse {
-        try await request("api/inventory/add", method: "POST", body: try json(NewItems(items: items)), contentType: "application/json")
+    func inventoryCSV() async throws -> String { try await text("api/inventory.csv") }
+
+    func add(_ items: [NewItem], source: String) async throws -> InventoryResponse {
+        try await request("api/inventory/add", method: "POST", body: try json(NewItems(items: items, source: source)), contentType: "application/json")
     }
 
     func setQuantity(partNum: String, colorId: Int, qty: Int) async throws -> InventoryResponse {
         try await request("api/inventory/set", method: "POST", body: try json(NewItem(partNum: partNum, colorId: colorId, qty: qty)), contentType: "application/json")
     }
 
-    func builds(search: String, ignoreColor: Bool, variants: Bool, offset: Int, limit: Int = 40) async throws -> BuildsResponse {
-        try await request("api/builds", query: [
-            URLQueryItem(name: "q", value: search),
-            URLQueryItem(name: "ignoreColor", value: ignoreColor ? "1" : "0"),
-            URLQueryItem(name: "variants", value: variants ? "1" : "0"),
+    // MARK: Batches
+
+    /// Everything added to the inventory, newest first.
+    func batches() async throws -> [BatchInfo] {
+        let out: BatchesResponse = try await request("api/batches")
+        return out.batches
+    }
+
+    /// Takes a batch's pieces back out of the inventory.
+    func undoBatch(id: String) async throws -> InventoryResponse {
+        try await request("api/batches/\(id)", method: "DELETE")
+    }
+
+    /// An earlier batch these items closely resemble, if there is one.
+    func checkBatch(_ items: [NewItem]) async throws -> SimilarBatch? {
+        let out: BatchCheckResponse = try await request("api/batches/check", method: "POST", body: try json(NewItems(items: items)), contentType: "application/json")
+        return out.similar
+    }
+
+    /// Tells the server what a scanned piece really was, with its crop, so recognition can be improved.
+    func sendCorrection(jpeg: Data, partNum: String, colorId: Int, predicted: String, longMm: Float) async throws {
+        _ = try await send("api/corrections", query: [
+            URLQueryItem(name: "partNum", value: partNum),
+            URLQueryItem(name: "colorId", value: String(colorId)),
+            URLQueryItem(name: "predicted", value: predicted),
+            URLQueryItem(name: "longMm", value: String(format: "%.1f", longMm)),
+        ], method: "POST", body: jpeg, contentType: "image/jpeg")
+    }
+
+    // MARK: Builds
+
+    func builds(query: BuildQuery, offset: Int) async throws -> BuildsResponse {
+        var items = [
+            URLQueryItem(name: "q", value: query.search),
+            URLQueryItem(name: "ignoreColor", value: query.ignoreColor ? "1" : "0"),
+            URLQueryItem(name: "variants", value: query.variants ? "1" : "0"),
+            URLQueryItem(name: "sort", value: query.sort.rawValue),
             URLQueryItem(name: "offset", value: String(offset)),
-            URLQueryItem(name: "limit", value: String(limit)),
-        ])
+            URLQueryItem(name: "limit", value: "40"),
+        ]
+        if query.favouritesOnly { items.append(URLQueryItem(name: "favourites", value: "1")) }
+        if let minYear = query.minYear { items.append(URLQueryItem(name: "minYear", value: String(minYear))) }
+        if let maxYear = query.maxYear { items.append(URLQueryItem(name: "maxYear", value: String(maxYear))) }
+        return try await request("api/builds", query: items)
     }
 
     func buildDetail(setNum: String, ignoreColor: Bool, variants: Bool) async throws -> BuildDetail {
@@ -106,5 +176,50 @@ final class API {
             URLQueryItem(name: "ignoreColor", value: ignoreColor ? "1" : "0"),
             URLQueryItem(name: "variants", value: variants ? "1" : "0"),
         ])
+    }
+
+    func missingCSV(setNum: String, ignoreColor: Bool, variants: Bool) async throws -> String {
+        try await text("api/builds/\(setNum)/missing.csv", query: [
+            URLQueryItem(name: "ignoreColor", value: ignoreColor ? "1" : "0"),
+            URLQueryItem(name: "variants", value: variants ? "1" : "0"),
+        ])
+    }
+
+    /// Marks or unmarks a set as a favourite. Returns every favourite set number.
+    func setFavourite(setNum: String, on: Bool) async throws -> [String] {
+        let out: FavouritesResponse = try await request("api/favourites/\(setNum)", method: on ? "PUT" : "DELETE")
+        return out.sets
+    }
+}
+
+/// What the screens need from the server. `API` is the real thing; previews pass sample data instead.
+protocol BrickService {
+    func inventory() async throws -> InventoryResponse
+    func inventoryCSV() async throws -> String
+    func add(_ items: [NewItem], source: String) async throws -> InventoryResponse
+    func setQuantity(partNum: String, colorId: Int, qty: Int) async throws -> InventoryResponse
+    func batches() async throws -> [BatchInfo]
+    func undoBatch(id: String) async throws -> InventoryResponse
+    func checkBatch(_ items: [NewItem]) async throws -> SimilarBatch?
+    func sendCorrection(jpeg: Data, partNum: String, colorId: Int, predicted: String, longMm: Float) async throws
+    func builds(query: BuildQuery, offset: Int) async throws -> BuildsResponse
+    func buildDetail(setNum: String, ignoreColor: Bool, variants: Bool) async throws -> BuildDetail
+    func missingCSV(setNum: String, ignoreColor: Bool, variants: Bool) async throws -> String
+    func setFavourite(setNum: String, on: Bool) async throws -> [String]
+}
+
+extension API: BrickService {}
+
+enum ExportFile {
+    /// Writes text to a temporary file so it can be shared as a file. Returns nil if it cannot be written.
+    static func write(_ text: String, named name: String) -> URL? {
+        let safe = name.replacingOccurrences(of: "/", with: "-")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(safe)
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch {
+            return nil
+        }
     }
 }
