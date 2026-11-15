@@ -6,6 +6,10 @@
 	<string>The camera is used to find and identify your Lego pieces.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Brick Scan talks to the Brick Inventory server running on your computer.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_brickinventory._tcp</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
