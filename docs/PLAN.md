@@ -1,24 +1,35 @@
 # Plan: from working pipeline to a usable app
 
-Status when this was written: every stage exists and compiles (detect, measure, recognise, fuse views, match to sets), the piece detector is trained, and the recognition model is a 100-shape pilot. Nothing has run on a phone or seen a real photo. The phone app needs the Node server on the same Wi-Fi.
+Status when this was written: every stage exists and compiles (detect, measure, recognise, fuse views, match to sets), the piece detector is trained, and the recognition model is a 100-shape pilot. Nothing has run on a phone or seen a real photo.
 
 Work is split into what can be done and verified without a phone (Parts A and B, now) and what needs real photos (Part C, later).
 
-## Part A: make the phone self-sufficient
+## Architecture: phone for perception, server for knowledge
 
-Goal: install the app, scan, see what you can build. No server, no Wi-Fi, no settings.
+The phone does what has to happen at camera speed: detect pieces, measure them, recognise their shape, fuse views. The server holds everything that changes or is shared: the catalog, set matching, the inventory, corrections, and second opinions on hard pieces.
+
+Why not put everything on the phone:
+- **One implementation.** Set matching and the catalog logic exist once, already tested. A Swift copy would have to be kept identical forever.
+- **Always current.** New sets appear weekly; the server refreshes its catalog and every user has them at once.
+- **Better accuracy over time.** The server can collect corrections for retraining, run a larger model or an outside service on pieces the phone is unsure about, and deliver new phone models.
+- **Room to grow.** Inventory shared across devices, and later things like parts prices, need a server anyway.
+
+What this costs: the app needs a connection to finish a scan and to show builds, and a public release needs the server hosted somewhere with user accounts. Until then it runs on a computer on the same Wi-Fi, as now.
+
+## Part A: a solid phone-plus-server base
 
 | Step | What | How it is verified without a phone |
 | --- | --- | --- |
-| A1 | **Core logic as a Swift package** (`ios/BrickCore`): everything that is not camera or screen. Moves `PieceDetector`, the detector's pixel grouping, view fusion and the size check out of the app target. | `swift test` on the Mac |
-| A2 | **Catalog file.** A Node script (reusing `lib/catalog.js`) writes one SQLite file: parts, colours, which colours each part comes in (with how common and a picture), sets, set contents, and the print/mould variant groups. Expected size 15-25 MB. Bundled in the app. | Row counts and spot checks against the server |
-| A3 | **Catalog reader in Swift**, using the SQLite that ships with iOS (no dependency): part lookup, search, colour ranking for a measured colour. | Same fixtures as the JS tests; results must match the server's |
-| A4 | **Set matching in Swift**: port of `ownedCounts`, `builds`, `buildDetail`. Set contents are held in memory as flat arrays (about 12 MB) so ranking all sets stays under a tenth of a second. | Golden files: the server computes builds for sample inventories on the real catalog, the Swift port must produce identical output |
-| A5 | **Inventory on the phone**, in its own SQLite file: lots, scan batches, timestamps. CSV export and import in the format Rebrickable accepts. | Unit tests |
-| A6 | **Switch the app over**: screens talk to the local services, the Settings server field and the server recognition path are removed. The web app and server stay in the repository as a separate, desktop way to use the same catalog. | Xcode build on the Mac |
-| A7 | **Replay harness**: the scan pipeline takes frames and camera poses from an interface, not directly from ARKit. A command-line tool feeds it a rendered sweep (the scene renderer already knows every piece and the camera) and reports end-to-end accuracy. | This is itself the verification tool: detection, recognition, de-duplication and counting, measured on synthetic sweeps on the Mac |
+| A1 | **Server: scans as batches.** Every addition to the inventory is a batch with a time and a source, listed and undoable. | Server tests |
+| A2 | **Server: corrections.** When a user fixes a match, the crop and the right answer are saved in the layout `ml/evaluate.py` and training already read. | Server tests |
+| A3 | **Server: richer builds.** Sort by fewest missing pieces, filter by year, export a set's missing parts. | Server tests |
+| A4 | **Second opinion.** Pieces the phone model is unsure about, or that look like none of its shapes, are sent to the server's recognition service; the better answer wins. Common pieces stay on the phone; rare ones get the wider coverage. | Replay harness (A6) |
+| A5 | **Core logic as a Swift package** (`ios/BrickCore`): everything that is not camera or screen, including `PieceDetector`, the detector's pixel grouping, view fusion and the size check. | `swift test` on the Mac |
+| A6 | **Replay harness**: the scan pipeline takes frames and camera poses from an interface, not directly from ARKit. A command-line tool feeds it a rendered sweep (the scene renderer knows every piece and the camera) and reports end-to-end accuracy. | This is itself the verification tool: detection, recognition, de-duplication and counting, measured on synthetic sweeps on the Mac |
+| A7 | **Scanning without a connection.** The phone keeps names and colours for the shapes its model knows, so a scan can be completed and reviewed offline and sent when the server is reachable. | Unit tests |
+| A8 | **No setup.** The app finds a server on the local network by itself; later, a hosted address is built in. | Xcode build |
 
-Later, not now: catalog updates downloaded in the app (needs somewhere to host the file), iCloud sync.
+Needed before a public release, not now: hosting, user accounts and sign-in, a real database in place of the JSON file, scheduled catalog refresh.
 
 ## Part B: make it easy to use
 
@@ -27,13 +38,13 @@ Later, not now: catalog updates downloaded in the app (needs somewhere to host t
 | B1 | **Guided scanning.** A small map of the table showing where the camera has been and where pieces were found, so gaps are obvious. Haptic tick for each new piece. A "looks complete" prompt when a pass over covered ground finds nothing new. |
 | B2 | **Review by exception.** Confident pieces are accepted automatically and summarised. Only uncertain ones are shown, grouped by look-alike, each with its crop beside catalog pictures of the top three candidates. One tap to choose, one to mark "not a Lego piece". |
 | B3 | **Scans that add up.** Each scan is a batch added to one inventory. Batches are listed with date and piece count and can be undone. Warning when a new scan looks like a repeat of the last one. |
-| B4 | **What can I build.** Filters for theme, size and year; sort by fewest missing pieces; favourites. Set page shows what is missing with pictures, links to instructions, and exports the missing list (CSV, and BrickLink wanted-list XML). |
+| B4 | **What can I build.** Filters for theme, size and year; sort by fewest missing pieces; favourites. Set page shows what is missing with pictures, links to instructions, and exports the missing list as CSV. (A BrickLink wanted list needs BrickLink's own part and colour numbers, which the catalog download does not include.) |
 | B5 | **First run and empty states.** Three-screen introduction to laying out pieces and sweeping. Clear messages when the camera is denied, the table is not found, or lighting is too dim. |
 | B6 | **Accessibility.** Dynamic Type, VoiceOver labels, colour names always shown beside swatches. |
 
-Verification without a phone: every screen gets SwiftUI previews with sample data, and the Mac session can build and screenshot them in the simulator once its CoreSimulator is updated. The camera screen cannot run in the simulator; its logic is covered by the replay harness (A7).
+Verification without a phone: every screen gets SwiftUI previews with sample data, and the Mac session can build and screenshot them in the simulator once its CoreSimulator is updated. The camera screen cannot run in the simulator; its logic is covered by the replay harness (A6).
 
-Order: A1, A2-A5 (independent of each other), A6, A7, then B2 and B3 (they shape the data model), B4, B1, B5, B6.
+Order: A1-A3 (server), A5, A6, A4, then B2 and B3, B4, B1, A7, A8, B5, B6.
 
 ## Part C: accuracy, once real photos exist
 

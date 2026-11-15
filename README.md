@@ -26,9 +26,9 @@ To use your phone's camera, start it with `HOST=0.0.0.0 npm start` and open `htt
 
 **Scan.** Spread pieces on a plain surface and take a photo. The browser finds each separate piece (`public/segment.js`: background estimation, thresholding, connected components), and each crop is sent to the [Brickognize](https://brickognize.com) recognition service to name the part. The piece's colour is measured from the photo and matched against the colours that part is actually made in. You review every match before anything is saved.
 
-**Inventory.** Adjust counts, add parts by name or number, add every part of a set you own by its set number, or export a CSV (`Part,Color,Quantity`, which Rebrickable can import).
+**Inventory.** Adjust counts, add parts by name or number, add every part of a set you own by its set number, or export a CSV (`Part,Color,Quantity`, which Rebrickable can import). Every addition is listed under Recent additions and can be undone.
 
-**What can I build?** Every set in the [Rebrickable](https://rebrickable.com/downloads/) catalog is ranked by how many of its pieces you have. Open a set to see exactly what is missing. Two options loosen the matching: ignore colour, and treat printed or re-moulded versions of a part as the same part.
+**What can I build?** Every set in the [Rebrickable](https://rebrickable.com/downloads/) catalog is ranked by how many of its pieces you have. Sort by most complete or by fewest missing pieces. Open a set to see exactly what is missing and export that list. Two options loosen the matching: ignore colour, and treat printed or re-moulded versions of a part as the same part.
 
 ## iPhone app (Brick Scan)
 
@@ -59,5 +59,7 @@ If Xcode will not open the project file, create a new iOS App project (SwiftUI) 
 - Brickognize uses BrickLink part numbers. Most are the same as Rebrickable's, but a piece whose number differs is reported as "no match" and has to be added by hand.
 - Minifigures and spare parts are not counted towards a set.
 - Your inventory lives in `data/inventory.json`.
+- When the phone app sends a correction, the crop is saved under `data/corrections/<part number>/`, the layout the training scripts read.
+- The plan for what comes next is in `docs/PLAN.md`.
 
 LEGO® is a trademark of the LEGO Group, which does not sponsor or endorse this project.

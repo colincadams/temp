@@ -70,6 +70,10 @@
           <button class="btn">Add set</button>
         </form>
         <p id="inv-status" class="hint" role="status"></p>
+        <details id="batches-box" hidden>
+          <summary>Recent additions</summary>
+          <div id="batches"></div>
+        </details>
       </div>
       <div class="panel">
         <input id="inv-filter" type="search" placeholder="Filter inventory…">
@@ -84,6 +88,7 @@
         <div class="row wrap">
           <input id="b-q" class="grow" type="search" placeholder="Search sets…">
           <select id="b-theme"><option value="">All themes</option></select>
+          <select id="b-sort" aria-label="Sort"><option value="percent">Most complete first</option><option value="missing">Fewest missing pieces first</option></select>
           <label>Min. pieces <input id="b-min" type="number" min="1" value="20" style="width:5em"></label>
         </div>
         <div class="row wrap">

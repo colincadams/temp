@@ -208,7 +208,7 @@ $('#add-results').addEventListener('click', async () => {
   if (!items.length) return;
   $('#add-results').disabled = true;
   try {
-    const inv = await api('/api/inventory/add', { json: { items } });
+    const inv = await api('/api/inventory/add', { json: { items, source: 'photo scan' } });
     updateBadge(inv);
     $('#results').hidden = true;
     $('#detect').hidden = true;
@@ -226,6 +226,7 @@ let inventory = { items: [], pieces: 0, lots: 0 };
 
 function updateBadge(inv) {
   inventory = inv;
+  loadBatches().catch(() => {});
   $('#inv-badge').textContent = inv.pieces;
   $('#inv-pieces').textContent = inv.pieces;
   $('#inv-lots').textContent = inv.lots;
@@ -235,6 +236,24 @@ async function loadInventory() {
   updateBadge(await api('/api/inventory'));
   renderInventory();
 }
+
+// Everything added so far, newest first, each with an Undo.
+async function loadBatches() {
+  const { batches } = await api('/api/batches');
+  $('#batches-box').hidden = batches.length === 0;
+  $('#batches').innerHTML = batches.slice(0, 30).map((b) => `
+    <div class="row batch" data-id="${esc(b.id)}">
+      <span class="grow">${esc(b.source)} · ${b.pieces} pieces <span class="hint">${esc(new Date(b.at).toLocaleString())}</span></span>
+      <button class="btn">Undo</button>
+    </div>`).join('');
+}
+$('#batches').addEventListener('click', async (e) => {
+  const row = e.target.closest('.batch');
+  if (!row || !e.target.closest('button')) return;
+  updateBadge(await api(`/api/batches/${encodeURIComponent(row.dataset.id)}`, { method: 'DELETE' }));
+  renderInventory();
+  $('#inv-status').textContent = 'Removed that addition from your inventory.';
+});
 
 function renderInventory() {
   const f = $('#inv-filter').value.trim().toLowerCase();
@@ -324,7 +343,7 @@ const matchParams = () => `ignoreColor=${$('#b-color').checked ? 1 : 0}&variants
 async function loadBuilds(reset) {
   if (reset) builds.offset = 0;
   const seq = ++builds.seq;
-  const qs = `${matchParams()}&minParts=${encodeURIComponent($('#b-min').value || 20)}&q=${encodeURIComponent($('#b-q').value)}&theme=${encodeURIComponent($('#b-theme').value)}&limit=${builds.page}&offset=${builds.offset}`;
+  const qs = `${matchParams()}&minParts=${encodeURIComponent($('#b-min').value || 20)}&q=${encodeURIComponent($('#b-q').value)}&theme=${encodeURIComponent($('#b-theme').value)}&sort=${$('#b-sort').value}&limit=${builds.page}&offset=${builds.offset}`;
   const out = await api(`/api/builds?${qs}`);
   if (seq !== builds.seq) return;
   const list = $('#b-list');
@@ -345,7 +364,7 @@ async function loadBuilds(reset) {
     ? 'Your inventory is empty, so nothing is buildable yet. Scan some pieces first.'
     : `You can fully build ${out.complete} of ${out.count} matching sets. Sorted by how close you are.`;
 }
-for (const id of ['#b-color', '#b-variants', '#b-theme']) $(id).addEventListener('change', () => loadBuilds(true));
+for (const id of ['#b-color', '#b-variants', '#b-theme', '#b-sort']) $(id).addEventListener('change', () => loadBuilds(true));
 for (const id of ['#b-q', '#b-min']) $(id).addEventListener('input', debounce(() => loadBuilds(true)));
 $('#b-more').addEventListener('click', () => loadBuilds(false));
 
@@ -364,7 +383,7 @@ $('#b-list').addEventListener('click', async (e) => {
     <h2>${esc(d.name)}</h2>
     <p class="hint">${esc(d.setNum)} · ${esc(d.theme)} · ${d.year} · you have ${d.owned} of ${d.total} pieces (${Math.floor(d.owned / d.total * 100)}%) ·
       <a href="https://rebrickable.com/sets/${encodeURIComponent(d.setNum)}/" target="_blank" rel="noopener">instructions &amp; details on Rebrickable</a></p>
-    ${missing.length ? `<h2>Missing (${d.total - d.owned} pieces)</h2><div class="cards">${missing.map(row).join('')}</div>` : '<p class="have">You have every piece for this set.</p>'}
+    ${missing.length ? `<h2>Missing (${d.total - d.owned} pieces) <a class="btn" href="/api/builds/${encodeURIComponent(d.setNum)}/missing.csv?${matchParams()}" download>Export list</a></h2><div class="cards">${missing.map(row).join('')}</div>` : '<p class="have">You have every piece for this set.</p>'}
     ${have.length ? `<h2 style="margin-top:16px">Already have</h2><div class="cards">${have.map(row).join('')}</div>` : ''}`;
   $('#set-dialog').showModal();
   $('#set-dialog').scrollTop = 0;

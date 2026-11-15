@@ -1,6 +1,7 @@
 'use strict';
 const http = require('node:http');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const path = require('node:path');
 const { Catalog, ensureData } = require('./lib/catalog');
 const { InventoryStore } = require('./lib/store');
@@ -32,7 +33,7 @@ async function readJson(req) {
 
 function bad(msg, status = 400) { return Object.assign(new Error(msg), { status }); }
 
-function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'), identify = brickognize }) {
+function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'), identify = brickognize, correctionsDir = null }) {
   const matchOpts = (sp) => ({ ignoreColor: sp.get('ignoreColor') === '1', variants: sp.get('variants') !== '0' });
 
   const inventoryView = () => {
@@ -107,10 +108,11 @@ function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'),
 
     if (p === '/api/inventory/add' && m === 'POST') {
       const body = await readJson(req);
-      const items = Array.isArray(body.items) ? body.items.map(validItem) : [validItem(body)];
-      for (const it of items) store.add(it.partNum, it.colorId, it.qty);
+      const items = (Array.isArray(body.items) ? body.items.map(validItem) : [validItem(body)]).filter((it) => it.qty > 0);
+      if (!items.length) throw bad('Nothing to add');
+      const batch = store.addBatch(items, body.source);
       store.save();
-      return inventoryView();
+      return { ...inventoryView(), batchId: batch.id };
     }
 
     if (p === '/api/inventory/set' && m === 'POST') {
@@ -126,10 +128,41 @@ function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'),
       if (setNum && !setNum.includes('-')) setNum += '-1';
       const parts = catalog.setParts(setNum);
       if (!parts || !parts.length) throw bad(`No parts list found for set "${setNum}"`, 404);
-      for (const it of parts) store.add(it.partNum, it.colorId, it.qty);
-      store.save();
       const set = catalog.sets[catalog.setIdx.get(setNum)];
-      return { ...inventoryView(), added: { setNum, name: set.name, pieces: set.total } };
+      const batch = store.addBatch(parts, `set ${setNum} ${set.name}`);
+      store.save();
+      return { ...inventoryView(), batchId: batch.id, added: { setNum, name: set.name, pieces: set.total } };
+    }
+
+    // Everything added to the inventory, newest first, so a scan or a set can be undone.
+    if (p === '/api/batches' && m === 'GET') {
+      return {
+        batches: store.batches.map((b) => ({ id: b.id, at: b.at, source: b.source, lots: b.items.length, pieces: b.items.reduce((n, it) => n + it.qty, 0) })).reverse(),
+      };
+    }
+
+    if (p.startsWith('/api/batches/') && m === 'DELETE') {
+      if (!store.undoBatch(decodeURIComponent(p.slice('/api/batches/'.length)))) throw bad('No such batch', 404);
+      store.save();
+      return inventoryView();
+    }
+
+    // A user fixed a match: keep the crop under the right part number as a labelled real-world example.
+    if (p === '/api/corrections' && m === 'POST') {
+      if (!correctionsDir) throw bad('Corrections are not being collected', 404);
+      const pi = catalog.resolvePart(sp.get('partNum'));
+      if (pi === undefined) throw bad(`Unknown part "${sp.get('partNum')}"`);
+      const image = await readBody(req);
+      if (image.length < 100) throw bad('Empty image');
+      const partNum = catalog.parts[pi].num, id = crypto.randomUUID();
+      const dir = path.join(correctionsDir, partNum.replace(/[^A-Za-z0-9._-]/g, '_'));
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, `${id}.jpg`), image);
+      const colour = sp.has('colorId') && sp.get('colorId') !== '' ? catalog.color(Number(sp.get('colorId'))) : undefined;
+      const record = { id, at: new Date().toISOString(), partNum, colorId: colour ? colour.id : null,
+        predicted: (sp.get('predicted') || '').slice(0, 40) || null, longMm: Number(sp.get('longMm')) || null };
+      fs.appendFileSync(path.join(correctionsDir, 'corrections.jsonl'), JSON.stringify(record) + '\n');
+      return { saved: id };
     }
 
     if (p === '/api/builds' && m === 'GET') {
@@ -140,6 +173,9 @@ function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'),
         minPct: num('minPct', 0),
         q: sp.get('q') || '',
         theme: sp.get('theme') || '',
+        sort: sp.get('sort') === 'missing' ? 'missing' : 'percent',
+        minYear: num('minYear', 0),
+        maxYear: num('maxYear', 9999),
         limit: Math.min(200, Math.max(1, num('limit', 60))),
         offset: Math.max(0, num('offset', 0)),
       });
@@ -169,6 +205,15 @@ function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'),
     if (url.pathname === '/api/inventory.csv' && req.method === 'GET') {
       const rows = store.list().map((i) => `${i.partNum},${i.colorId},${i.qty}`);
       res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="lego-inventory.csv"' });
+      res.end(['Part,Color,Quantity', ...rows].join('\n') + '\n');
+      return;
+    }
+    const missingCsv = /^\/api\/builds\/(.+)\/missing\.csv$/.exec(url.pathname);
+    if (missingCsv && req.method === 'GET') {
+      const detail = catalog.buildDetail(store.list(), decodeURIComponent(missingCsv[1]), matchOpts(url.searchParams));
+      if (!detail) { res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Unknown set'); return; }
+      const rows = detail.parts.filter((x) => x.have < x.need).map((x) => `${x.partNum},${x.colorId},${x.need - x.have}`);
+      res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="missing-${detail.setNum}.csv"` });
       res.end(['Part,Color,Quantity', ...rows].join('\n') + '\n');
       return;
     }
@@ -209,7 +254,7 @@ async function main() {
   const catalog = await Catalog.load(dataDir);
   console.log(`Loaded ${catalog.sets.length} sets and ${catalog.parts.length} parts in ${((Date.now() - t) / 1000).toFixed(1)}s`);
   const store = new InventoryStore(path.join(dataDir, 'inventory.json'));
-  createApp({ catalog, store }).listen(port, host, () => console.log(`Brick Inventory running at http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`));
+  createApp({ catalog, store, correctionsDir: path.join(dataDir, 'corrections') }).listen(port, host, () => console.log(`Brick Inventory running at http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`));
 }
 
 if (require.main === module) main().catch((err) => { console.error(err.message || err); process.exit(1); });
