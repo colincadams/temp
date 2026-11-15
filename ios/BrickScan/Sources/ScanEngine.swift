@@ -4,6 +4,7 @@ import BrickCore
 import Combine
 import CoreImage
 import simd
+import UIKit
 
 /// Turns a sweep of the camera over a table into a list of identified pieces.
 ///
@@ -17,6 +18,8 @@ import simd
 ///    viewpoints, fused with the piece's measured size (`ShapeFusion`); a piece the model stays unsure of is
 ///    also sent to the server once for a second opinion (`SecondOpinion`). Without a model, two crops of
 ///    each piece are sent to the server.
+/// 6. add what the camera saw well to the coverage map (`CoverageMap`) and guess whether the scan has found
+///    everything (`CompletionGuess`), for the map on the scan screen.
 ///
 /// Everything that is not camera, Core ML or publishing lives in the BrickCore package, where it is unit-tested.
 final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecked Sendable {
@@ -28,6 +31,8 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
     @Published private(set) var tableFound = false
     @Published private(set) var lastError: String?
     @Published var torchOn = false { didSet { applyTorch() } }
+    /// Where the camera has looked, the pieces and the phone, for the map on the scan screen.
+    @Published private(set) var coverage = CoverageSnapshot.empty
 
     let session = ARSession()
 
@@ -40,6 +45,7 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
     private let maxConcurrentRequests = 3
     private let deviceViewsPerFrame = 12         // keeps frame processing responsive on a crowded table
     private let resolveAfterViews = 3            // views before asking the server for names and colours
+    private let coverageInset: Float = 0.05      // share of each image edge left out of coverage (pieces cut by it are ignored)
     // Sightings to confirm a piece, views per piece and the distances between them: `PieceTracker.Settings`.
 
     // MARK: State (confined to `queue`)
@@ -75,6 +81,15 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
     private var tableAnchorID: UUID?
     private var tableY: Float?
     private var whiteBalanceLocked = false
+    private var coverageMap = CoverageMap()
+    private var quietTime = CoverageQuietTime()
+    /// `coverageMap`'s cells as the map draws them, rebuilt when a frame adds to the map.
+    private var coverageCells: [CoverageSnapshot.Cell] = []
+    /// Which way the top of the phone points, on the table; updated every frame.
+    private var lastHeading: SIMD2<Float>?
+    /// Confirmed pieces already announced with a haptic tick.
+    private var announced = Set<UUID>()
+    private let haptics = HapticTicker()
 
     override init() {
         super.init()
@@ -113,6 +128,10 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
             self.info.removeAll()
             self.serverOpinions.removeAll()
             self.jobs.removeAll()
+            self.coverageMap.reset()
+            self.quietTime.reset()
+            self.coverageCells.removeAll()
+            self.announced.removeAll()
             self.publish(hint: nil)
         }
         lastError = nil
@@ -156,6 +175,7 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
         }
         lastCameraPosition = position
         lastCameraTime = time
+        lastHeading = ScanEngine.heading(of: camera)
 
         guard scanning, time - lastProcessed >= frameInterval else { return }
         lastProcessed = time
@@ -280,8 +300,33 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
             serverOpinions[id] = nil
         }
 
+        // What this frame saw well enough to find whole pieces in.
+        let resolution = frame.camera.imageResolution
+        let update = coverageMap.add(view: projector, imageWidth: Float(resolution.width), imageHeight: Float(resolution.height),
+                                     inset: coverageInset)
+        quietTime.record(time: time, cameraPosition: cameraPosition, update: update, confirmedCount: tracker.confirmed.count)
+        if update.cellsInView > 0 {
+            let map = coverageMap
+            coverageCells = map.cells.map { (entry: (key: CoverageCell, value: Int)) -> CoverageSnapshot.Cell in
+                let centre = map.center(of: entry.key)
+                return CoverageSnapshot.Cell(x: centre.x, z: centre.y, count: entry.value)
+            }
+        }
+
         pump()
         publish(hint: tracker.confirmed.isEmpty ? "Move over your pieces" : "Sweep slowly across the table")
+    }
+
+    /// The direction on the table in which the top edge of the phone points, or nil if the phone is held on edge.
+    /// The app runs in portrait, where the top of the screen is the camera's -x axis.
+    private static func heading(of camera: simd_float4x4) -> SIMD2<Float>? {
+        var top = SIMD2<Float>(-camera.columns.0.x, -camera.columns.0.z)
+        if simd_length(top) < 0.3 {
+            // Phone nearly upright: use where the camera looks instead.
+            top = SIMD2<Float>(-camera.columns.2.x, -camera.columns.2.z)
+        }
+        let length = simd_length(top)
+        return length > 0.1 ? top / length : nil
     }
 
     // MARK: On-device recognition
@@ -402,10 +447,32 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
                                  thumbnail: piece.thumbnail, candidates: candidates)
         }
         let found = tableY != nil
+
+        // The map, and the guess at whether the scan is complete.
+        let timesSeen: [Int] = tracker.confirmed.map { (piece: TrackedPiece) -> Int in coverageMap.timesSeen(at: piece.position) }
+        let guess = CompletionGuess.assess(timesSeen: timesSeen, quietSeconds: quietTime.seconds)
+        let mapPieces: [CoverageSnapshot.Piece] = snapshots.map { (piece: PieceSnapshot) -> CoverageSnapshot.Piece in
+            CoverageSnapshot.Piece(id: piece.id, x: piece.position.x, z: piece.position.z, state: piece.state)
+        }
+        var camera: SIMD2<Float>?
+        if found, let position = lastCameraPosition { camera = SIMD2<Float>(position.x, position.z) }
+        let coverage = CoverageSnapshot(cellSize: coverageMap.cellSize, cells: coverageCells, bounds: coverageMap.bounds,
+                                        camera: camera, heading: camera == nil ? nil : lastHeading,
+                                        pieces: mapPieces, guess: guess)
+
+        // A haptic tick for newly confirmed pieces.
+        let fresh = snapshots.filter { (piece: PieceSnapshot) -> Bool in !announced.contains(piece.id) }
+        for piece in fresh { announced.insert(piece.id) }
+        let haptics = self.haptics
+
         DispatchQueue.main.async {
             self.pieces = snapshots
             self.tableFound = found
+            self.coverage = coverage
             if let hint { self.hint = hint }
+        }
+        if !fresh.isEmpty {
+            Task { @MainActor in haptics.tick() }
         }
     }
 
@@ -470,5 +537,33 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
         // Core Image's origin is the bottom-left corner. Clamping repeats edge pixels if the square leaves the frame.
         let rect = CGRect(x: centreX - side / 2, y: fullHeight - centreY - side / 2, width: side, height: side)
         return CIImage(cvPixelBuffer: buffer).clampedToExtent().cropped(to: rect)
+    }
+}
+
+/// A light haptic tap, at most one per `minInterval` so a burst of new pieces does not buzz continuously.
+final class HapticTicker: @unchecked Sendable {
+    private let minInterval: TimeInterval
+    // Touched only on the main thread, from `tick()`.
+    private var generator: UIImpactFeedbackGenerator?
+    private var lastTick: TimeInterval = 0
+
+    init(minInterval: TimeInterval = 0.35) {
+        self.minInterval = minInterval
+    }
+
+    @MainActor
+    func tick() {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastTick >= minInterval else { return }
+        lastTick = now
+        let feedback: UIImpactFeedbackGenerator
+        if let generator {
+            feedback = generator
+        } else {
+            feedback = UIImpactFeedbackGenerator(style: .light)
+            generator = feedback
+        }
+        feedback.impactOccurred()
+        feedback.prepare()   // keeps the next tap prompt
     }
 }

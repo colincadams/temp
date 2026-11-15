@@ -6,6 +6,7 @@ import SwiftUI
 import UIKit
 
 /// Live camera view with a dot floating over every piece found so far.
+/// Dot colours (white seen, yellow identifying, green identified, red unknown) match `CoverageMapView`.
 struct ARScanView: UIViewRepresentable {
     let engine: ScanEngine
 
@@ -153,6 +154,16 @@ struct ScanView: View {
                         .foregroundStyle(.white)
                 }
                 Spacer()
+                HStack(alignment: .bottom, spacing: 10) {
+                    if engine.coverage.guess != .noPieces {
+                        CoverageStatusView(guess: engine.coverage.guess, canReview: identified > 0) { reviewing = true }
+                    }
+                    Spacer(minLength: 0)
+                    if engine.tableFound || !engine.coverage.cells.isEmpty {
+                        CoverageMapView(snapshot: engine.coverage)
+                            .frame(width: 128, height: 128)
+                    }
+                }
                 HStack(spacing: 12) {
                     Button {
                         engine.torchOn.toggle()
@@ -181,6 +192,13 @@ struct ScanView: View {
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
             }
             .padding()
+        }
+        .onChange(of: engine.coverage.guess.looksComplete) { (_: Bool, complete: Bool) in
+            // The prompt appears without moving focus, so say it.
+            if complete {
+                let text = CoverageStatusView.text(for: engine.coverage.guess, canReview: identified > 0)
+                UIAccessibility.post(notification: .announcement, argument: text)
+            }
         }
     }
 }
