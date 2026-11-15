@@ -199,9 +199,46 @@ public final class PieceTracker {
             let d = TableMath.distance(piece.position, observation.position)
             if d < nearestDistance { nearest = piece; nearestDistance = d }
         }
+        return record(observation, into: nearest, time: time)
+    }
+
+    /// Match all of one frame's detections at once, closest pairs first, or start tracking new pieces.
+    ///
+    /// Unlike calling `observe` once per detection, the result does not depend on the order of the detections:
+    /// a piece seen for the first time right next to a known one cannot take over that piece's track just because
+    /// its detection came first, which would leave the known piece to start a second track (counted twice).
+    /// Each piece is matched by at most one detection per frame.
+    /// - Returns: for each observation in order, its piece, or nil if it is too small or too large to be a Lego piece.
+    @discardableResult
+    public func observe(frame observations: [PieceObservation], time: TimeInterval) -> [TrackedPiece?] {
+        var candidates: [(observation: Int, piece: Int, distance: Float)] = []
+        for (o, observation) in observations.enumerated() {
+            guard observation.longMm >= settings.minLongMm, observation.longMm <= settings.maxLongMm else { continue }
+            let radius = max(settings.minMatchRadius, observation.longMm / 1000 * settings.matchRadiusPerLength)
+            for (p, piece) in pieces.enumerated() where !matched.contains(piece.id) {
+                let d = TableMath.distance(piece.position, observation.position)
+                if d < radius { candidates.append((o, p, d)) }
+            }
+        }
+        // Ties are broken by order so the result is deterministic.
+        candidates.sort { ($0.distance, $0.observation, $0.piece) < ($1.distance, $1.observation, $1.piece) }
+        var pieceFor = [TrackedPiece?](repeating: nil, count: observations.count)
+        var taken = Set<Int>()
+        for candidate in candidates where pieceFor[candidate.observation] == nil && !taken.contains(candidate.piece) {
+            pieceFor[candidate.observation] = pieces[candidate.piece]
+            taken.insert(candidate.piece)
+        }
+        return observations.enumerated().map { o, observation in
+            guard observation.longMm >= settings.minLongMm, observation.longMm <= settings.maxLongMm else { return nil }
+            return record(observation, into: pieceFor[o], time: time)
+        }
+    }
+
+    /// Add a detection to `existing`, or start a new piece with it.
+    private func record(_ observation: PieceObservation, into existing: TrackedPiece?, time: TimeInterval) -> TrackedPiece {
         let piece: TrackedPiece
-        if let nearest {
-            piece = nearest
+        if let existing {
+            piece = existing
             piece.sightings += 1
             piece.position = TableMath.mix(piece.position, observation.position, settings.positionBlend)
         } else {

@@ -39,6 +39,30 @@ python ml/export_detector.py --checkpoint ml/runs/detector/best.pt
 
 The network predicts, for each pixel, whether it belongs to a piece, how near it is to a piece's centre, and the offset to that centre. Two touching pieces share an edge but not a centre, so grouping pixels by the centre they point at separates them. The scenes deliberately include pieces pushed flush together in the same colour, the hardest case.
 
+## Replay a sweep
+
+Scores the app's scan pipeline (find pieces in each frame, place them on the table, follow them across frames, count each once) on a rendered sweep, with no phone. The tool runs the same BrickCore code the app runs, with the app's frame gating (phone facing down, not moving too fast, one frame every 0.2 s).
+
+```sh
+# 1. Render a phone's pass over one table. --ids adds a piece-number map per frame (a quick second pass).
+python3 ml/render_sweep.py --ldraw ml/ldraw --out ml/sweeps/001 --seed 1 --ids \
+    --table-width 300 --table-depth 220 --image-width 640 --image-height 480 --samples 8
+
+# 2. Optional: the trained detector's output for every frame, or ideal output made from the piece maps.
+python3 ml/sweep_maps.py ml/sweeps/001 --checkpoint ml/runs/detector/best.pt
+python3 ml/sweep_maps.py ml/sweeps/001 --ideal
+
+# 3. Replay and score.
+cd ios/BrickCore
+swift run -c release brick-replay ../../ml/sweeps/001 --detector colour   # the colour threshold (no model)
+swift run -c release brick-replay ../../ml/sweeps/001 --detector truth    # perfect detection: shows tracking errors alone
+swift run -c release brick-replay ../../ml/sweeps/001 --detector maps     # the detector network, via NNNN.maps
+```
+
+The report says how many pieces were on the table, how many the camera showed whole in at least 3 processed frames (the ones the scan could fairly be expected to find), and of those how many were found, missed, or merged into a neighbour; and of the pieces counted, how many were a piece counted twice, two or more pieces taken as one, or nothing at all. It also gives the error of the measured length against the piece's true footprint, the position error, and how far the measured colour is from the catalog colour. `--list` prints every piece; the full report is saved as `replay-<detector>.json` in the sweep folder. `--match frame` matches each frame's detections to known pieces all at once instead of one at a time as the app does now.
+
+Each frame is stored for the tool as raw pixels at the detector's working size (`NNNN.rgba`, every `step`-th pixel as the app downsamples, `step` = width / 640), next to `NNNN.ids` (piece numbers, 16-bit) and `NNNN.maps` (detector output, 4 float32 planes of 320 x 240). For a sweep rendered before these existed, run `python3 ml/sweep_frames.py <sweep folder>`; true sizes then come from `--manifest ml/manifest.json`.
+
 ## Design
 
 - **Shape classes.** Printed and re-moulded versions of a part are one class, since they are the same shape. 1,000 classes cover about 93% of all pieces in sets since 1990; 3,000 cover about 96%.
