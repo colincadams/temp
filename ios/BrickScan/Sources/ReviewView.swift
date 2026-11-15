@@ -1,3 +1,4 @@
+import BrickCore
 import SwiftUI
 import UIKit
 
@@ -106,14 +107,20 @@ struct ReviewView: View {
     @State private var showConfident = false
     @State private var confirmRepeat = false
     @State private var repeatMessage = ""
+    @State private var keptOnPhone = false
+    @State private var keptMessage = ""
     private let unidentified: Int
     private let service: any BrickService
+    /// Where a scan goes when the computer cannot be reached. Without it, that is shown as an error.
+    private let pending: PendingScans?
     private let onSaved: () -> Void
 
-    init(pieces: [PieceSnapshot], service: any BrickService = API.shared, onSaved: @escaping () -> Void) {
+    init(pieces: [PieceSnapshot], service: any BrickService = API.shared, pending: PendingScans? = nil,
+         onSaved: @escaping () -> Void) {
         _groups = State(initialValue: ReviewGroup.make(from: pieces))
         self.unidentified = ReviewGroup.unidentifiedCount(in: pieces)
         self.service = service
+        self.pending = pending
         self.onSaved = onSaved
     }
 
@@ -163,6 +170,11 @@ struct ReviewView: View {
                             .foregroundStyle(.red)
                     }
                 }
+            }
+            .alert("Kept on this phone", isPresented: $keptOnPhone) {
+                Button("OK") { finish() }
+            } message: {
+                Text(keptMessage)
             }
             .navigationTitle("Add \(BatchText.pieces(total))")
             .navigationBarTitleDisplayMode(.inline)
@@ -270,6 +282,46 @@ struct ReviewView: View {
         return items
     }
 
+    /// The same items as `mergedItems`, with names kept for showing the scan while it waits on the phone.
+    private func itemsToKeep() -> [PendingItem] {
+        var totals: [String: Int] = [:]
+        var first: [String: ReviewGroup] = [:]
+        var order: [String] = []
+        for group in groups where !group.removed && group.count > 0 {
+            let key = "\(group.candidate.partNum)|\(group.color.id)"
+            if first[key] == nil {
+                first[key] = group
+                order.append(key)
+            }
+            totals[key, default: 0] += group.count
+        }
+        var items: [PendingItem] = []
+        for key in order {
+            if let group = first[key], let qty = totals[key] {
+                items.append(PendingItem(partNum: group.candidate.partNum, colorId: group.color.id, qty: qty,
+                                         name: group.candidate.name, colorName: group.color.name, rgb: group.color.rgb))
+            }
+        }
+        return items
+    }
+
+    /// The computer cannot be reached: keep the scan on the phone and say so. False if there is nowhere to keep it.
+    private func keepOnPhone() -> Bool {
+        guard let pending, pending.add(itemsToKeep(), source: "scan") else { return false }
+        let what = total == 1 ? "this piece is" : "these \(total) pieces are"
+        keptMessage = "Your computer can't be reached right now, so \(what) kept on this phone. "
+            + "\(total == 1 ? "It" : "They") will be added to your inventory as soon as the computer is reachable. "
+            + "You can see the scan in the Inventory tab."
+        saving = false
+        keptOnPhone = true
+        return true
+    }
+
+    private func finish() {
+        onSaved()
+        dismiss()
+    }
+
     /// A correction for every piece with a crop in a group whose part or colour the user changed.
     private func pendingCorrections() -> [PendingCorrection] {
         var out: [PendingCorrection] = []
@@ -293,7 +345,13 @@ struct ReviewView: View {
         Task {
             if !confirmed {
                 // If the check itself fails, carry on: it must not stop a save.
-                let similar: SimilarBatch? = try? await service.checkBatch(items)
+                var similar: SimilarBatch?
+                do {
+                    similar = try await service.checkBatch(items)
+                } catch {
+                    // No point waiting for the save to time out as well.
+                    if APIError.isUnreachable(error), keepOnPhone() { return }
+                }
                 if let similar {
                     repeatMessage = "This looks like the scan you added on \(BatchText.when(similar.at)). Add it again?"
                     saving = false
@@ -304,6 +362,8 @@ struct ReviewView: View {
             do {
                 _ = try await service.add(items, source: "scan")
             } catch {
+                // Corrections are dropped in this case, as when they fail to send.
+                if APIError.isUnreachable(error), keepOnPhone() { return }
                 self.error = error.localizedDescription
                 saving = false
                 return
@@ -317,8 +377,7 @@ struct ReviewView: View {
                                                           longMm: correction.longMm)
                 }
             }
-            onSaved()
-            dismiss()
+            finish()
         }
     }
 }
@@ -458,7 +517,7 @@ private struct CandidateChoice: View {
 
 #if DEBUG
 #Preview("Review") {
-    ReviewView(pieces: SampleData.scan, service: PreviewService(), onSaved: { })
+    ReviewView(pieces: SampleData.scan, service: PreviewService(), pending: PendingScans(fileURL: nil), onSaved: { })
 }
 
 #Preview("Review, nothing to check") {

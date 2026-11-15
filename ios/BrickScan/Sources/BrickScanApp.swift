@@ -11,6 +11,8 @@ enum AppTab: Hashable {
 struct BrickScanApp: App {
     @StateObject private var engine = ScanEngine()
     @StateObject private var discovery = ServerDiscovery()
+    /// Scans kept on the phone while the computer could not be reached.
+    @StateObject private var pending = PendingScans()
     @AppStorage(IntroView.shownKey) private var introShown = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = AppTab.scan
@@ -43,13 +45,22 @@ struct BrickScanApp: App {
             }
             .environmentObject(engine)
             .environmentObject(discovery)
+            .environmentObject(pending)
             .fullScreenCover(isPresented: showIntro) {
                 IntroView(onDone: { introShown = true })
             }
             .task { await MainActor.run { discovery.refresh() } }
             .onChange(of: scenePhase) { (_: ScenePhase, newPhase: ScenePhase) in
-                // Back in the foreground: check the saved server again, or look for one on the network.
-                if newPhase == .active { discovery.refresh() }
+                // Back in the foreground: check the saved server again, or look for one on the network,
+                // and send any scans kept on the phone.
+                if newPhase == .active {
+                    discovery.refresh()
+                    pending.retry(using: API.shared)
+                }
+            }
+            .onChange(of: discovery.state) { (_: ConnectionState, newState: ConnectionState) in
+                // The server has been found: send scans kept while it could not be reached.
+                if case .connected = newState { pending.retry(using: API.shared) }
             }
         }
     }

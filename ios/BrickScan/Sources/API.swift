@@ -2,7 +2,16 @@ import Foundation
 
 struct APIError: LocalizedError {
     let message: String
+    /// True when no server answered at all (no address yet, or nothing reachable there), as opposed to
+    /// a server that answered with an error. Scans that fail this way are kept on the phone and sent later.
+    var unreachable = false
     var errorDescription: String? { message }
+
+    /// Whether `error` means the server could not be reached.
+    static func isUnreachable(_ error: Error) -> Bool {
+        if let error = error as? APIError { return error.unreachable }
+        return error is URLError
+    }
 }
 
 /// Client for the Brick Inventory server (`server.js`) running on your computer.
@@ -50,7 +59,7 @@ final class API {
     private func send(_ path: String, query: [URLQueryItem] = [], method: String = "GET",
                       body: Data? = nil, contentType: String? = nil) async throws -> Data {
         guard let base = baseURL, var parts = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false) else {
-            throw APIError(message: "The app is not connected to the server yet. Check Settings.")
+            throw APIError(message: "The app is not connected to the server yet. Check Settings.", unreachable: true)
         }
         if !query.isEmpty { parts.queryItems = query }
         guard let url = parts.url else { throw APIError(message: "The server address is not valid.") }
@@ -64,7 +73,8 @@ final class API {
         do {
             (data, response) = try await session.data(for: req)
         } catch {
-            throw APIError(message: "Can't reach the server at \(base.absoluteString). Is it running, and is the phone on the same Wi-Fi?")
+            throw APIError(message: "Can't reach the server at \(base.absoluteString). Is it running, and is the phone on the same Wi-Fi?",
+                           unreachable: true)
         }
         guard let http = response as? HTTPURLResponse else { throw APIError(message: "Unexpected response from the server.") }
         guard (200..<300).contains(http.statusCode) else {

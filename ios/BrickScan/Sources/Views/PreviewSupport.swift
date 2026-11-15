@@ -1,4 +1,5 @@
 #if DEBUG
+import BrickCore
 import SwiftUI
 import UIKit
 
@@ -67,6 +68,21 @@ enum SampleData {
     ], pieces: 49, lots: 3)
 
     static let emptyInventory = InventoryResponse(items: [], pieces: 0, lots: 0)
+
+    /// Two scans kept on the phone, in memory only.
+    static func pendingScans() -> PendingScans {
+        let pending = PendingScans(fileURL: nil)
+        pending.add([
+            PendingItem(partNum: "3001", colorId: 4, qty: 6, name: "Brick 2 x 4", colorName: "Red", rgb: "C91A09"),
+            PendingItem(partNum: "3023", colorId: 71, qty: 12, name: "Plate 1 x 2", colorName: "Light Bluish Gray", rgb: "A0A5A9"),
+            PendingItem(partNum: "3003", colorId: 14, qty: 3, name: "Brick 2 x 2", colorName: "Yellow", rgb: "F2CD37"),
+            PendingItem(partNum: "3040", colorId: 1, qty: 2, name: "Slope 45° 2 x 1", colorName: "Blue", rgb: "0055BF"),
+        ], source: "scan")
+        pending.add([
+            PendingItem(partNum: "3039", colorId: 1, qty: 4, name: "Slope 45° 2 x 2", colorName: "Blue", rgb: "0055BF"),
+        ], source: "scan")
+        return pending
+    }
 
     static let batches = [
         BatchInfo(id: "b3", at: "2026-11-14T18:20:00.000Z", source: "scan", lots: 14, pieces: 214),

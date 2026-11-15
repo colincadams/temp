@@ -10,6 +10,21 @@ private struct ClassFile: Codable {
     let classes: [ShapeClass]
 }
 
+/// What the bundled `classes.json` says about each shape's part: name, picture and colours (`OfflineCatalog`,
+/// in BrickCore), so pieces can be described without the server. Read once, on first use.
+enum BundledParts {
+    static let catalog: OfflineCatalog? = {
+        guard Bundle.main.url(forResource: "PartNet", withExtension: "mlmodelc") != nil,
+              let url = Bundle.main.url(forResource: "classes", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let catalog = OfflineCatalog.decode(data), !catalog.isEmpty else { return nil }
+        return catalog
+    }()
+
+    /// True when the phone can recognise and describe pieces by itself, so a scan can be finished offline.
+    static var available: Bool { catalog != nil }
+}
+
 /// Runs the part recognition model on the phone.
 ///
 /// The model and class list are optional resources (`PartNet.mlpackage` and `classes.json` in `Sources/Model/`).
@@ -17,6 +32,8 @@ private struct ClassFile: Codable {
 /// Not thread-safe: use from one queue.
 final class PartClassifier {
     let classes: [ShapeClass]
+    /// Names, pictures and colours of the shapes' parts, when the class file carries them.
+    let offline: OfflineCatalog?
     private let imageSize: Int
     private let model: MLModel
     private let context: CIContext
@@ -39,6 +56,7 @@ final class PartClassifier {
         CVPixelBufferCreate(kCFAllocatorDefault, file.imageSize, file.imageSize, kCVPixelFormatType_32BGRA, attributes, &buffer)
         guard let buffer else { return nil }
         self.classes = file.classes
+        self.offline = BundledParts.catalog
         self.imageSize = file.imageSize
         self.model = model
         self.context = context

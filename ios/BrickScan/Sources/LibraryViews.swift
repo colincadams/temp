@@ -1,3 +1,4 @@
+import BrickCore
 import SwiftUI
 
 // The "What can I build?" screens are in Views/BuildsViews.swift.
@@ -6,6 +7,9 @@ import SwiftUI
 
 struct InventoryView: View {
     private let service: any BrickService
+    @EnvironmentObject private var pending: PendingScans
+    /// The kept scan the user has asked to discard, while the confirmation is shown.
+    @State private var discarding: PendingScan?
     @State private var items: [InventoryItem] = []
     @State private var pieces = 0
     @State private var batches: [BatchInfo] = []
@@ -35,6 +39,15 @@ struct InventoryView: View {
         showAllBatches ? batches : Array(batches.prefix(batchesShownAtFirst))
     }
 
+    private var discardShown: Binding<Bool> {
+        Binding<Bool>(
+            get: { discarding != nil },
+            set: { (shown: Bool) in
+                if !shown { discarding = nil }
+            }
+        )
+    }
+
     private var batchToggleTitle: String {
         showAllBatches ? "Show fewer" : "Show all \(batches.count)"
     }
@@ -47,11 +60,14 @@ struct InventoryView: View {
                         Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
                     }
                 }
+                if !pending.scans.isEmpty {
+                    pendingSection
+                }
                 if !batches.isEmpty {
                     recentSection
                 }
                 Section {
-                    if loaded && items.isEmpty && error == nil {
+                    if loaded && items.isEmpty && error == nil && pending.scans.isEmpty {
                         Text("Nothing here yet. Scan some pieces to get started.").foregroundStyle(.secondary)
                     }
                     ForEach(shown) { (item: InventoryItem) in
@@ -75,6 +91,41 @@ struct InventoryView: View {
             .refreshable { await load() }
             .task { await load() }
             .task(id: csvVersion) { await writeCSV() }
+            .onChange(of: pending.delivered) { (_: Int, _: Int) in
+                // A scan kept on the phone has just been added on the server.
+                Task { await load() }
+            }
+            .confirmationDialog("Discard this scan?", isPresented: discardShown, titleVisibility: .visible,
+                                presenting: discarding) { (scan: PendingScan) in
+                Button("Discard \(BatchText.pieces(scan.pieces))", role: .destructive) { pending.discard(scan) }
+                Button("Keep it", role: .cancel) { }
+            } message: { (_: PendingScan) in
+                Text("Its pieces will not be added to your inventory.")
+            }
+        }
+    }
+
+    /// Scans kept on the phone because the computer could not be reached when they were added.
+    private var pendingSection: some View {
+        Section {
+            ForEach(pending.scans) { (scan: PendingScan) in
+                PendingScanRow(scan: scan)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            discarding = scan
+                        } label: {
+                            Label("Discard", systemImage: "trash")
+                        }
+                    }
+            }
+            Button(pending.sending ? "Sending…" : "Try sending now") {
+                pending.retry(using: service, includingRefused: true)
+            }
+            .disabled(pending.sending)
+        } header: {
+            Text("Waiting to be added")
+        } footer: {
+            Text("Kept on this phone because your computer could not be reached. Swipe one to the left to discard it.")
         }
     }
 
@@ -181,6 +232,36 @@ private struct InventoryRow: View {
     }
 }
 
+private struct PendingScanRow: View {
+    let scan: PendingScan
+
+    /// The first few parts, so the scan can be recognised.
+    private var contents: String {
+        let names: [String] = scan.items.prefix(3).map { (item: PendingItem) -> String in
+            let name = item.name ?? item.partNum
+            if let colorName = item.colorName { return "\(item.qty) × \(name), \(colorName)" }
+            return "\(item.qty) × \(name)"
+        }
+        let more = scan.items.count - names.count
+        return names.joined(separator: "; ") + (more > 0 ? "; and \(more) more" : "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Label(scan.summary, systemImage: scan.rejected ? "exclamationmark.triangle" : "clock.arrow.circlepath")
+                .font(.subheadline.weight(.semibold))
+            Text(contents)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            Text(scan.status)
+                .font(.caption)
+                .foregroundStyle(scan.rejected ? Color.red : Color.secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
 private struct BatchRow: View {
     let batch: BatchInfo
 
@@ -198,9 +279,16 @@ private struct BatchRow: View {
 #if DEBUG
 #Preview("Inventory") {
     InventoryView(service: PreviewService())
+        .environmentObject(PendingScans(fileURL: nil))
+}
+
+#Preview("Inventory, scans waiting") {
+    InventoryView(service: PreviewService())
+        .environmentObject(SampleData.pendingScans())
 }
 
 #Preview("Inventory, empty") {
     InventoryView(service: PreviewService(empty: true))
+        .environmentObject(PendingScans(fileURL: nil))
 }
 #endif

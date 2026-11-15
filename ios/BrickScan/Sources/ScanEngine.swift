@@ -16,8 +16,10 @@ import UIKit
 ///    (`PieceTracker`);
 /// 5. recognise each piece. With a bundled model (`PartClassifier`) this happens on the phone from many
 ///    viewpoints, fused with the piece's measured size (`ShapeFusion`); a piece the model stays unsure of is
-///    also sent to the server once for a second opinion (`SecondOpinion`). Without a model, two crops of
-///    each piece are sent to the server.
+///    also sent to the server once for a second opinion (`SecondOpinion`). Names, pictures and colours come
+///    from the bundled class file when it has them (`OfflineCatalog`, `ColorRanking`), so a scan can be finished
+///    without a connection; the server's description replaces them when it arrives. Without a model, two crops
+///    of each piece are sent to the server.
 /// 6. add what the camera saw well to the coverage map (`CoverageMap`) and guess whether the scan has found
 ///    everything (`CompletionGuess`), for the map on the scan screen.
 ///
@@ -71,6 +73,8 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
     private var info: [UUID: [String: Candidate]] = [:]
     /// The server's answer for pieces sent for a second opinion, best first.
     private var serverOpinions: [UUID: [Candidate]] = [:]
+    /// Candidates described from the bundled class file (no server needed), by part number and measured colour.
+    private var offlineCandidates: [String: Candidate] = [:]
     private var jobs: [Job] = []
     private var activeRequests = 0
     private var generation = 0
@@ -127,6 +131,7 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
             self.tracker.reset()
             self.info.removeAll()
             self.serverOpinions.removeAll()
+            self.offlineCandidates.removeAll()
             self.jobs.removeAll()
             self.coverageMap.reset()
             self.quietTime.reset()
@@ -365,8 +370,10 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
                 .map { c in var c = c; c.score = piece.averageScore(c.partNum); return c }
                 .sorted { $0.score > $1.score }
         }
-        let device: [Candidate] = fusedShapes(piece, classifier: classifier).compactMap { entry in
-            guard var candidate = known[entry.shape.partNum] else { return nil }
+        // The server's description when it has arrived (its picture may be fresher), else the bundled one.
+        let device: [Candidate] = fusedShapes(piece, classifier: classifier).compactMap { (entry: FusedShape) -> Candidate? in
+            let partNum = entry.shape.partNum
+            guard var candidate = known[partNum] ?? offlineCandidate(partNum, for: piece, classifier: classifier) else { return nil }
             candidate.score = entry.probability
             return candidate
         }
@@ -375,6 +382,30 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
         case .device: return device
         case .server: return server
         }
+    }
+
+    /// A candidate described on the phone from the bundled class file, with its colours ranked for the piece's
+    /// measured colour as the server would rank them. Offered once the piece has had as many views as the server
+    /// would be asked after, so pieces become "identified" at the same point with or without a connection.
+    private func offlineCandidate(_ partNum: String, for piece: TrackedPiece, classifier: PartClassifier) -> Candidate? {
+        guard piece.deviceViews >= resolveAfterViews, let offline = classifier.offline else { return nil }
+        let rgbHex = piece.rgbHex
+        let key = partNum + "|" + rgbHex
+        if let cached = offlineCandidates[key] { return cached }
+        guard let part = offline.part(partNum, measuredHex: rgbHex) else { return nil }
+        let colors: [ColorInfo] = part.colors.map { (color: CatalogColor) -> ColorInfo in
+            ColorInfo(id: color.id, name: color.name, rgb: color.rgb, isTrans: color.isTrans)
+        }
+        let candidate = Candidate(partNum: part.partNum, name: part.name, img: part.img, colors: colors, score: 0)
+        if offlineCandidates.count >= 20_000 { offlineCandidates.removeAll() }   // measured colours drift; keep it bounded
+        offlineCandidates[key] = candidate
+        return candidate
+    }
+
+    /// True when the bundled class file describes every one of these parts, so the server is not needed for them.
+    private func describedOffline(_ partNums: [String]) -> Bool {
+        guard let offline = classifier?.offline else { return false }
+        return partNums.allSatisfy { (partNum: String) -> Bool in offline.contains(partNum) }
     }
 
     // MARK: Recognition requests
@@ -411,6 +442,7 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
         defer { pump() }
         guard generation == self.generation, let piece = tracker.piece(id: job.pieceID) else { return }
         piece.inFlight -= 1
+        var error = error
         switch (job.work, candidates) {
         case (.identify(_, _, let secondOpinion), let candidates?):
             if secondOpinion {
@@ -425,14 +457,19 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
             if !secondOpinion {
                 piece.failures += 1
                 piece.lastSubmitCamera = nil
+            } else if classifier?.offline != nil {
+                error = nil   // the phone's answer stands, and the scan can be finished without the server
             }
         case (.describe, let candidates?):
             for candidate in candidates { info[piece.id, default: [:]][candidate.partNum] = candidate }
         case (.describe(let partNums), nil):
             piece.failures += 1
             piece.requestedInfo.subtract(partNums)   // ask again the next time the piece is seen
+            // Offline is not a problem worth showing when the bundled class file already describes these parts.
+            if describedOffline(partNums) { error = nil }
         }
-        DispatchQueue.main.async { self.lastError = error }
+        let shownError = error
+        DispatchQueue.main.async { self.lastError = shownError }
         publish(hint: nil)
     }
 

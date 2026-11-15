@@ -69,6 +69,7 @@ struct ARScanView: UIViewRepresentable {
 struct ScanView: View {
     @EnvironmentObject private var engine: ScanEngine
     @EnvironmentObject private var discovery: ServerDiscovery
+    @EnvironmentObject private var pending: PendingScans
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(IntroView.shownKey) private var introShown = false
     @State private var reviewing = false
@@ -121,7 +122,7 @@ struct ScanView: View {
             if visible { startIfAllowed() }
         }
         .sheet(isPresented: $reviewing) {
-            ReviewView(pieces: engine.pieces, service: API.shared) { engine.reset() }
+            ReviewView(pieces: engine.pieces, service: API.shared, pending: pending) { engine.reset() }
         }
     }
 
@@ -137,7 +138,8 @@ struct ScanView: View {
 
             VStack(spacing: 8) {
                 if serverMissing {
-                    ServerMissingBanner(searching: discovery.state == .searching, openSettings: openSettings)
+                    ServerMissingBanner(searching: discovery.state == .searching, offline: BundledParts.available,
+                                        openSettings: openSettings)
                 } else {
                     Text(engine.hint)
                         .font(.subheadline.weight(.medium))
@@ -206,7 +208,15 @@ struct ScanView: View {
 /// Shown over the camera when there is no server to name the pieces.
 private struct ServerMissingBanner: View {
     let searching: Bool
+    /// The phone can identify pieces by itself, and keeps scans until the computer is reachable.
+    let offline: Bool
     let openSettings: () -> Void
+
+    private var detail: String {
+        offline
+            ? "Pieces are still identified on this phone. A scan you add is kept here until Brick Inventory on your computer can be reached."
+            : "Pieces cannot be identified without it. Start Brick Inventory on your computer and keep the phone on the same Wi-Fi."
+    }
 
     var body: some View {
         let title: String = searching ? "Looking for the server on this network…" : "Not connected to the server"
@@ -215,7 +225,7 @@ private struct ServerMissingBanner: View {
             Label(title, systemImage: symbol)
                 .font(.subheadline.weight(.semibold))
             if !searching {
-                Text("Pieces cannot be identified without it. Start Brick Inventory on your computer and keep the phone on the same Wi-Fi.")
+                Text(detail)
                     .font(.caption)
                     .multilineTextAlignment(.center)
                 Button("Open Settings", action: openSettings)
@@ -262,7 +272,12 @@ private struct CameraDeniedView: View {
 }
 
 #Preview("Server not found") {
-    ServerMissingBanner(searching: false, openSettings: { })
+    ServerMissingBanner(searching: false, offline: false, openSettings: { })
+        .padding()
+}
+
+#Preview("Server not found, offline scanning") {
+    ServerMissingBanner(searching: false, offline: true, openSettings: { })
         .padding()
 }
 #endif
