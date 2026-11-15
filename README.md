@@ -49,6 +49,8 @@ How the sweep works (`ios/BrickScan/Sources/ScanEngine.swift`):
 - White balance is locked once the table is in view so colours stay consistent across the sweep.
 - Frames are skipped while the phone is tilted or moving fast, because blurred or oblique views hurt accuracy.
 
+The app's logic that does not touch the camera or the screen (piece grouping, size check, view fusion, piece tracking) lives in the Swift package `ios/BrickCore` and has its own tests: `cd ios/BrickCore && swift test`.
+
 If Xcode will not open the project file, create a new iOS App project (SwiftUI) named BrickScan, delete its generated Swift files, drag in everything from `ios/BrickScan/Sources/`, and copy the four keys from `ios/BrickScan/Info.plist` into the target's Info tab.
 
 ## Good to know

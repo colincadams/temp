@@ -2,6 +2,8 @@
 
 Status when this was written: every stage exists and compiles (detect, measure, recognise, fuse views, match to sets), the piece detector is trained, and the recognition model is a 100-shape pilot. Nothing has run on a phone or seen a real photo.
 
+Progress since: done and tested are A1-A3 (server batches, corrections, richer builds), A5 (core Swift package, 35 tests), plus favourites, CSV import, repeat-scan check, catalog refresh and network discovery on the server. Written but not yet compiled in Xcode: the rewired app, A4 (second opinion), A8 (the phone finding the server), B2-B6 (review by exception, undo, build filters, first run, accessibility). Not started: A6, A7, B1.
+
 Work is split into what can be done and verified without a phone (Parts A and B, now) and what needs real photos (Part C, later).
 
 ## Architecture: phone for perception, server for knowledge
