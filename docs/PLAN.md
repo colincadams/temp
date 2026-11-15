@@ -2,7 +2,9 @@
 
 Status when this was written: every stage exists and compiles (detect, measure, recognise, fuse views, match to sets), the piece detector is trained, and the recognition model is a 100-shape pilot. Nothing has run on a phone or seen a real photo.
 
-Progress since: done and tested are A1-A3 (server batches, corrections, richer builds), A5 (core Swift package, 35 tests), plus favourites, CSV import, repeat-scan check, catalog refresh and network discovery on the server. Written but not yet compiled in Xcode: the rewired app, A4 (second opinion), A8 (the phone finding the server), B2-B6 (review by exception, undo, build filters, first run, accessibility). Not started: A6, A7, B1.
+Progress since: done and tested are A1-A3 (server batches, corrections, richer builds), A5 (core Swift package), A6 (replay harness), the core of B1 (coverage map and the "looks complete" rule), plus favourites, CSV import, repeat-scan check, catalog refresh and network discovery on the server. Written but not yet compiled in Xcode: the rewired app, A4 (second opinion), A8 (the phone finding the server), B1-B6 screens (coverage map, review by exception, undo, build filters, first run, accessibility). Not started: A7 (offline scanning).
+
+First replay results on four rendered sweeps (651 pieces): with perfect detection the tracker counts 649 pieces correctly with 2 extra, both from tall upright pieces that seem to slide as the camera passes. The colour-threshold detector finds only 28-41% of pieces, because it merges touching ones, so the trained detector is essential. Measured length runs 3-5% long overall and much more for tall pieces seen from an angle.
 
 Work is split into what can be done and verified without a phone (Parts A and B, now) and what needs real photos (Part C, later).
 

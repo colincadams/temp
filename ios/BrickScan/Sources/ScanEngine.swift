@@ -257,12 +257,20 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
 
         tracker.beginFrame()
         var deviceBudget = deviceViewsPerFrame
+        // Real position and size of each detection on the table.
+        var seen: [(blob: DetectedBlob, observation: PieceObservation)] = []
         for blob in blobs {
-            // Real position and size, then: same spot as a piece we already know, or a new one?
             guard let spot = projector.locate(workX: blob.cx, workY: blob.cy, step: Float(work.step)) else { continue }
             let quality = PieceTracker.viewQuality(of: blob, frameWidth: work.width, frameHeight: work.height)
-            let observation = PieceObservation(blob: blob, position: spot.position, mmPerPixel: spot.mmPerPixel, quality: quality)
-            guard let piece = tracker.observe(observation, time: time) else { continue }
+            seen.append((blob, PieceObservation(blob: blob, position: spot.position, mmPerPixel: spot.mmPerPixel, quality: quality)))
+        }
+        // Same spot as a piece we already know, or a new one? Matching the whole frame at once, closest pairs first,
+        // stops a newly visible piece from taking over a neighbour's track (which would count the neighbour twice).
+        let matchedPieces = tracker.observe(frame: seen.map { $0.observation }, time: time)
+        for (index, entry) in seen.enumerated() {
+            guard let piece = matchedPieces[index] else { continue }
+            let blob = entry.blob
+            let quality = entry.observation.quality
 
             if let classifier {
                 if deviceBudget > 0, tracker.shouldClassify(piece, cameraPosition: cameraPosition),
