@@ -208,6 +208,12 @@ $('#add-results').addEventListener('click', async () => {
   if (!items.length) return;
   $('#add-results').disabled = true;
   try {
+    // The same photo added twice would count every piece twice, so ask first if this looks like a repeat.
+    const { similar } = await api('/api/batches/check', { json: { items } });
+    if (similar && !confirm(`These look like the ${similar.pieces} pieces you already added on ${new Date(similar.at).toLocaleString()}. Add them again?`)) {
+      $('#add-results').disabled = false;
+      return;
+    }
     const inv = await api('/api/inventory/add', { json: { items, source: 'photo scan' } });
     updateBadge(inv);
     $('#results').hidden = true;
@@ -296,6 +302,21 @@ $('#inv-clear').addEventListener('click', async () => {
   renderInventory();
 });
 
+// Import a CSV in the format Export CSV produces.
+$('#inv-import').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const out = await api('/api/inventory/import', { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body: file });
+    updateBadge(out);
+    renderInventory();
+    const rows = out.skipped === 1 ? '1 row was' : `${out.skipped} rows were`;
+    $('#inv-status').textContent = `Added ${out.added.pieces} pieces from ${file.name}.` +
+      (out.skipped ? ` ${rows} skipped because the part, colour or quantity was not recognised.` : '');
+  } catch (err) { $('#inv-status').textContent = `Could not import ${file.name}: ${err.message}`; }
+});
+
 // Manual add by search
 $('#part-search').addEventListener('input', debounce(async (e) => {
   const q = e.target.value.trim();
@@ -340,38 +361,62 @@ $('#add-set-form').addEventListener('submit', async (e) => {
 const builds = { offset: 0, page: 60, seq: 0 };
 const matchParams = () => `ignoreColor=${$('#b-color').checked ? 1 : 0}&variants=${$('#b-variants').checked ? 1 : 0}`;
 
+const star = (setNum, on) => `<button type="button" class="star${on ? ' on' : ''}" data-set="${esc(setNum)}" aria-pressed="${on}"
+  aria-label="${on ? 'Remove from favourites' : 'Add to favourites'}" title="${on ? 'Remove from favourites' : 'Add to favourites'}">${on ? '★' : '☆'}</button>`;
+
+// A year filter only applies once a whole four-digit year has been typed.
+function yearParams() {
+  const year = (id) => { const v = parseInt($(id).value, 10); return v >= 1000 && v <= 9999 ? v : null; };
+  const min = year('#b-year-min'), max = year('#b-year-max');
+  return (min ? `&minYear=${min}` : '') + (max ? `&maxYear=${max}` : '');
+}
+
 async function loadBuilds(reset) {
   if (reset) builds.offset = 0;
   const seq = ++builds.seq;
-  const qs = `${matchParams()}&minParts=${encodeURIComponent($('#b-min').value || 20)}&q=${encodeURIComponent($('#b-q').value)}&theme=${encodeURIComponent($('#b-theme').value)}&sort=${$('#b-sort').value}&limit=${builds.page}&offset=${builds.offset}`;
+  const favOnly = $('#b-fav').checked;
+  const qs = `${matchParams()}&minParts=${encodeURIComponent($('#b-min').value || 20)}&q=${encodeURIComponent($('#b-q').value)}&theme=${encodeURIComponent($('#b-theme').value)}&sort=${$('#b-sort').value}${yearParams()}${favOnly ? '&favourites=1' : ''}&limit=${builds.page}&offset=${builds.offset}`;
   const out = await api(`/api/builds?${qs}`);
   if (seq !== builds.seq) return;
   const list = $('#b-list');
   if (reset) list.innerHTML = '';
   list.insertAdjacentHTML('beforeend', out.sets.map((s) => {
     const pct = s.owned / s.total, full = s.owned === s.total;
-    return `<button class="set" data-set="${esc(s.setNum)}">
+    return `<div class="set" role="button" tabindex="0" data-set="${esc(s.setNum)}">
       <img loading="lazy" src="${esc(s.img)}" alt="">
+      ${star(s.setNum, s.favourite)}
       <div class="name">${esc(s.name)}</div>
       <div class="sub hint" style="margin:0">${esc(s.setNum)} · ${esc(s.theme)} · ${s.year}</div>
       <div class="bar ${full ? 'full' : ''}"><i style="width:${(pct * 100).toFixed(1)}%"></i></div>
       <div>${full ? '<span class="have">You can build this!</span>' : `${Math.floor(pct * 100)}% · missing ${s.total - s.owned} of ${s.total}`}</div>
-    </button>`;
+    </div>`;
   }).join(''));
   builds.offset += out.sets.length;
   $('#b-more').hidden = builds.offset >= out.count;
-  $('#b-summary').textContent = inventory.pieces === 0 && !out.complete
-    ? 'Your inventory is empty, so nothing is buildable yet. Scan some pieces first.'
-    : `You can fully build ${out.complete} of ${out.count} matching sets. Sorted by how close you are.`;
+  $('#b-summary').textContent = favOnly && out.count === 0
+    ? 'No favourite sets match. Tap the star on a set to make it a favourite.'
+    : inventory.pieces === 0 && !out.complete
+      ? 'Your inventory is empty, so nothing is buildable yet. Scan some pieces first.'
+      : `You can fully build ${out.complete} of ${out.count} matching ${favOnly ? 'favourite ' : ''}sets. Sorted by how close you are.`;
 }
-for (const id of ['#b-color', '#b-variants', '#b-theme', '#b-sort']) $(id).addEventListener('change', () => loadBuilds(true));
-for (const id of ['#b-q', '#b-min']) $(id).addEventListener('input', debounce(() => loadBuilds(true)));
+for (const id of ['#b-color', '#b-variants', '#b-theme', '#b-sort', '#b-fav']) $(id).addEventListener('change', () => loadBuilds(true));
+for (const id of ['#b-q', '#b-min', '#b-year-min', '#b-year-max']) $(id).addEventListener('input', debounce(() => loadBuilds(true)));
 $('#b-more').addEventListener('click', () => loadBuilds(false));
 
-$('#b-list').addEventListener('click', async (e) => {
-  const card = e.target.closest('.set');
-  if (!card) return;
-  const d = await api(`/api/builds/${encodeURIComponent(card.dataset.set)}?${matchParams()}`);
+// Stars on the set cards and in the set dialog.
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.star');
+  if (!btn) return;
+  const setNum = btn.dataset.set, on = btn.getAttribute('aria-pressed') !== 'true';
+  try {
+    await api(`/api/favourites/${encodeURIComponent(setNum)}`, { method: on ? 'PUT' : 'DELETE' });
+  } catch (err) { alert(err.message); return; }
+  for (const el of document.querySelectorAll('.star')) if (el.dataset.set === setNum) el.outerHTML = star(setNum, on);
+  if (!on && $('#b-fav').checked) loadBuilds(true);
+});
+
+async function openSet(setNum) {
+  const d = await api(`/api/builds/${encodeURIComponent(setNum)}?${matchParams()}`);
   const missing = d.parts.filter((p) => p.have < p.need), have = d.parts.filter((p) => p.have >= p.need);
   const row = (p) => `
     <div class="card">${partImg(p.img)}<div class="body">
@@ -380,13 +425,20 @@ $('#b-list').addEventListener('click', async (e) => {
       <div class="${p.have < p.need ? 'missing' : 'have'}">${p.have < p.need ? `Need ${p.need - p.have} more (have ${p.have} of ${p.need})` : `Have ${p.need} of ${p.need}`}</div>
     </div></div>`;
   $('#set-detail').innerHTML = `
-    <h2>${esc(d.name)}</h2>
+    <h2>${star(d.setNum, d.favourite)}${esc(d.name)}</h2>
     <p class="hint">${esc(d.setNum)} · ${esc(d.theme)} · ${d.year} · you have ${d.owned} of ${d.total} pieces (${Math.floor(d.owned / d.total * 100)}%) ·
       <a href="https://rebrickable.com/sets/${encodeURIComponent(d.setNum)}/" target="_blank" rel="noopener">instructions &amp; details on Rebrickable</a></p>
     ${missing.length ? `<h2>Missing (${d.total - d.owned} pieces) <a class="btn" href="/api/builds/${encodeURIComponent(d.setNum)}/missing.csv?${matchParams()}" download>Export list</a></h2><div class="cards">${missing.map(row).join('')}</div>` : '<p class="have">You have every piece for this set.</p>'}
     ${have.length ? `<h2 style="margin-top:16px">Already have</h2><div class="cards">${have.map(row).join('')}</div>` : ''}`;
   $('#set-dialog').showModal();
   $('#set-dialog').scrollTop = 0;
+}
+$('#b-list').addEventListener('click', (e) => {
+  const card = e.target.closest('.set');
+  if (card && !e.target.closest('.star')) openSet(card.dataset.set);
+});
+$('#b-list').addEventListener('keydown', (e) => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.set')) { e.preventDefault(); openSet(e.target.dataset.set); }
 });
 $('#set-close').addEventListener('click', () => $('#set-dialog').close());
 

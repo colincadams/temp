@@ -3,10 +3,12 @@ const http = require('node:http');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
 const path = require('node:path');
-const { Catalog, ensureData } = require('./lib/catalog');
+const { Catalog, ensureData, catalogDate: catalogDateOf, isStale, refreshCatalog } = require('./lib/catalog');
 const { InventoryStore } = require('./lib/store');
 const { hexToRgb } = require('./lib/color');
 const { rerankBySize } = require('./lib/size');
+const { parseLine } = require('./lib/csv');
+const { advertise } = require('./lib/advertise');
 
 const BRICKOGNIZE_URL = 'https://api.brickognize.com/predict/parts/';
 const MAX_BODY = 12 * 1024 * 1024;
@@ -33,7 +35,11 @@ async function readJson(req) {
 
 function bad(msg, status = 400) { return Object.assign(new Error(msg), { status }); }
 
-function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'), identify = brickognize, correctionsDir = null }) {
+/**
+ * The HTTP server. `catalogDate` is when the catalog was downloaded (a Date, or null if unknown).
+ * The returned server has `setCatalog(catalog, date)`, which swaps in a newer catalog between requests.
+ */
+function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'), identify = brickognize, correctionsDir = null, catalogDate = null }) {
   const matchOpts = (sp) => ({ ignoreColor: sp.get('ignoreColor') === '1', variants: sp.get('variants') !== '0' });
 
   const inventoryView = () => {
@@ -57,6 +63,31 @@ function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'),
     return { partNum, colorId, qty };
   };
 
+  // "31058" means "31058-1", as it does when adding a set.
+  const fullSetNum = (raw) => {
+    const setNum = String(raw ?? '').trim();
+    return setNum && !setNum.includes('-') ? setNum + '-1' : setNum;
+  };
+  const favouritesView = () => ({ sets: [...store.favourites] });
+
+  // Rows of an exported inventory (Part,Color,Quantity). Rows that do not name a known part and colour are counted, not added.
+  const parseImport = (text) => {
+    const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((l) => l.trim() !== '');
+    if (lines.length && /^\s*"?part"?\s*,/i.test(lines[0])) lines.shift();
+    if (!lines.length) throw bad('That file has no rows to import');
+    const lots = new Map();
+    let skipped = 0;
+    for (const line of lines) {
+      const [part, color, quantity] = parseLine(line).map((f) => f.trim());
+      const colorId = Number(color), qty = Number(quantity);
+      if (!catalog.partIdx.has(part) || color === '' || color === undefined || !catalog.color(colorId) ||
+        quantity === '' || !Number.isInteger(qty) || qty < 1 || qty > 100000) { skipped++; continue; }
+      const k = `${part}|${colorId}`, lot = lots.get(k);
+      if (lot) lot.qty += qty; else lots.set(k, { partNum: part, colorId, qty });
+    }
+    return { items: [...lots.values()], skipped };
+  };
+
   async function api(req, url) {
     const { pathname: p, searchParams: sp } = url;
     const m = req.method;
@@ -67,6 +98,7 @@ function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'),
         themes: catalog.rootThemes(),
         setCount: catalog.sets.length,
         partCount: catalog.parts.length,
+        catalogDate: catalogDate ? catalogDate.toISOString().slice(0, 10) : null,
       };
     }
 
@@ -115,6 +147,14 @@ function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'),
       return { ...inventoryView(), batchId: batch.id };
     }
 
+    if (p === '/api/inventory/import' && m === 'POST') {
+      const { items, skipped } = parseImport((await readBody(req)).toString('utf8'));
+      if (!items.length) throw bad(`None of the ${skipped} rows could be imported: unknown part or colour, or a bad quantity`);
+      const batch = store.addBatch(items, 'import');
+      store.save();
+      return { ...inventoryView(), batchId: batch.id, skipped, added: { pieces: items.reduce((n, it) => n + it.qty, 0), lots: items.length } };
+    }
+
     if (p === '/api/inventory/set' && m === 'POST') {
       const it = validItem(await readJson(req));
       store.set(it.partNum, it.colorId, it.qty);
@@ -141,6 +181,15 @@ function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'),
       };
     }
 
+    // Does this look like something already added? Lets a client warn before the same pieces are counted twice.
+    if (p === '/api/batches/check' && m === 'POST') {
+      const body = await readJson(req);
+      if (!Array.isArray(body.items)) throw bad('items must be a list');
+      const items = body.items.map((it) => ({ partNum: String(it?.partNum ?? ''), colorId: Number(it?.colorId), qty: Number(it?.qty) }))
+        .filter((it) => it.partNum && Number.isFinite(it.colorId) && Number.isFinite(it.qty) && it.qty > 0);
+      return { similar: store.similarBatch(items, 0.7) };
+    }
+
     if (p.startsWith('/api/batches/') && m === 'DELETE') {
       if (!store.undoBatch(decodeURIComponent(p.slice('/api/batches/'.length)))) throw bad('No such batch', 404);
       store.save();
@@ -165,6 +214,17 @@ function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'),
       return { saved: id };
     }
 
+    if (p === '/api/favourites' && m === 'GET') return favouritesView();
+
+    if (p.startsWith('/api/favourites/') && (m === 'PUT' || m === 'DELETE')) {
+      const setNum = fullSetNum(decodeURIComponent(p.slice('/api/favourites/'.length)));
+      // A favourite whose set has since left the catalog can still be removed.
+      if (!catalog.setIdx.has(setNum) && !(m === 'DELETE' && store.favourites.has(setNum))) throw bad(`Unknown set "${setNum}"`, 404);
+      if (m === 'PUT') store.favourites.add(setNum); else store.favourites.delete(setNum);
+      store.save();
+      return favouritesView();
+    }
+
     if (p === '/api/builds' && m === 'GET') {
       const num = (k, d) => (sp.has(k) && Number.isFinite(Number(sp.get(k))) ? Number(sp.get(k)) : d);
       return catalog.builds(store.list(), {
@@ -178,13 +238,15 @@ function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'),
         maxYear: num('maxYear', 9999),
         limit: Math.min(200, Math.max(1, num('limit', 60))),
         offset: Math.max(0, num('offset', 0)),
+        favourites: store.favourites,
+        favouritesOnly: sp.get('favourites') === '1',
       });
     }
 
     if (p.startsWith('/api/builds/') && m === 'GET') {
       const detail = catalog.buildDetail(store.list(), decodeURIComponent(p.slice('/api/builds/'.length)), matchOpts(sp));
       if (!detail) throw bad('Unknown set', 404);
-      return detail;
+      return { ...detail, favourite: store.favourites.has(detail.setNum) };
     }
 
     throw bad('Not found', 404);
@@ -200,33 +262,42 @@ function createApp({ catalog, store, publicDir = path.join(__dirname, 'public'),
     });
   }
 
-  return http.createServer(async (req, res) => {
+  const csv = (res, filename, rows) => {
+    res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${filename}"` });
+    res.end(['Part,Color,Quantity', ...rows].join('\n') + '\n');
+  };
+
+  async function handle(req, res) {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/api/inventory.csv' && req.method === 'GET') {
-      const rows = store.list().map((i) => `${i.partNum},${i.colorId},${i.qty}`);
-      res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="lego-inventory.csv"' });
-      res.end(['Part,Color,Quantity', ...rows].join('\n') + '\n');
+      csv(res, 'lego-inventory.csv', store.list().map((i) => `${i.partNum},${i.colorId},${i.qty}`));
       return;
     }
     const missingCsv = /^\/api\/builds\/(.+)\/missing\.csv$/.exec(url.pathname);
     if (missingCsv && req.method === 'GET') {
       const detail = catalog.buildDetail(store.list(), decodeURIComponent(missingCsv[1]), matchOpts(url.searchParams));
       if (!detail) { res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Unknown set'); return; }
-      const rows = detail.parts.filter((x) => x.have < x.need).map((x) => `${x.partNum},${x.colorId},${x.need - x.have}`);
-      res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="missing-${detail.setNum}.csv"` });
-      res.end(['Part,Color,Quantity', ...rows].join('\n') + '\n');
+      csv(res, `missing-${detail.setNum}.csv`, detail.parts.filter((x) => x.have < x.need).map((x) => `${x.partNum},${x.colorId},${x.need - x.have}`));
       return;
     }
     if (!url.pathname.startsWith('/api/')) { serveStatic(req, res, url.pathname); return; }
+    const out = await api(req, url);
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(out));
+  }
+
+  const server = http.createServer(async (req, res) => {
     try {
-      const out = await api(req, url);
-      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(out));
+      await handle(req, res);
     } catch (err) {
-      const status = err.status || 500;
+      // A URL that cannot be parsed or decoded is the client's mistake, not a server fault.
+      const status = err.status || (err instanceof URIError || err.code === 'ERR_INVALID_URL' ? 400 : 500);
       if (status >= 500) console.error(err);
-      res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: err.message }));
+      if (res.headersSent) { res.end(); return; }
+      res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: status === 400 && !err.status ? 'Bad request' : err.message }));
     }
   });
+  server.setCatalog = (next, date = null) => { catalog = next; catalogDate = date; };
+  return server;
 }
 
 /** Ask the Brickognize API which part is in the image. Returns [{id, name, score}]. */
@@ -254,7 +325,14 @@ async function main() {
   const catalog = await Catalog.load(dataDir);
   console.log(`Loaded ${catalog.sets.length} sets and ${catalog.parts.length} parts in ${((Date.now() - t) / 1000).toFixed(1)}s`);
   const store = new InventoryStore(path.join(dataDir, 'inventory.json'));
-  createApp({ catalog, store, correctionsDir: path.join(dataDir, 'corrections') }).listen(port, host, () => console.log(`Brick Inventory running at http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`));
+  const downloaded = catalogDateOf(dataDir);
+  const server = createApp({ catalog, store, correctionsDir: path.join(dataDir, 'corrections'), catalogDate: downloaded });
+  server.listen(port, host, () => {
+    console.log(`Brick Inventory running at http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`);
+    advertise({ host, port, log: console.log });
+    // New sets appear every week: refresh an old catalog without holding up startup or needing a restart.
+    if (isStale(downloaded)) refreshCatalog({ dir: dataDir, swap: server.setCatalog, log: console.log });
+  });
 }
 
 if (require.main === module) main().catch((err) => { console.error(err.message || err); process.exit(1); });

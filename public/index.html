@@ -59,6 +59,10 @@
         <div class="row">
           <h2 class="grow"><span id="inv-pieces">0</span> pieces · <span id="inv-lots">0</span> different parts</h2>
           <a class="btn" href="/api/inventory.csv" download>Export CSV</a>
+          <label class="btn">
+            Import CSV
+            <input id="inv-import" type="file" accept=".csv,text/csv" hidden>
+          </label>
           <button id="inv-clear" class="btn danger">Clear all</button>
         </div>
         <div class="row">
@@ -94,6 +98,9 @@
         <div class="row wrap">
           <label><input id="b-color" type="checkbox"> Ignore colour</label>
           <label><input id="b-variants" type="checkbox" checked> Treat prints &amp; mould variants as the same part</label>
+          <label><input id="b-fav" type="checkbox"> Favourites only</label>
+          <label>Years <input id="b-year-min" type="number" min="1900" max="2100" placeholder="from" aria-label="From year" style="width:5.5em">
+            to <input id="b-year-max" type="number" min="1900" max="2100" placeholder="to" aria-label="To year" style="width:5.5em"></label>
         </div>
         <p id="b-summary" class="hint" role="status"></p>
       </div>
