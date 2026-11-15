@@ -10,3 +10,4 @@ complete.zip
 ios/BrickScan/Sources/Model/
 ml/scenes/
 .venv/
+ml/sweeps/
