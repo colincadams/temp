@@ -156,7 +156,8 @@ private struct SetRow: View {
     let onFavourite: () -> Void
 
     private var progressText: String {
-        set.complete ? "You can build this!" : "\(Int(set.fraction * 100))% · missing \(set.total - set.owned) of \(set.total)"
+        // `self.` is required: a computed property that starts with `set` reads as a setter.
+        self.set.complete ? "You can build this!" : "\(Int(set.fraction * 100))% · missing \(set.total - set.owned) of \(set.total)"
     }
 
     var body: some View {
