@@ -397,7 +397,7 @@ async function loadBuilds(reset) {
     ? 'No favourite sets match. Tap the star on a set to make it a favourite.'
     : inventory.pieces === 0 && !out.complete
       ? 'Your inventory is empty, so nothing is buildable yet. Scan some pieces first.'
-      : `You can fully build ${out.complete} of ${out.count} matching ${favOnly ? 'favourite ' : ''}sets. Sorted by how close you are.`;
+      : `You can fully build ${out.complete} of ${out.count} matching ${favOnly ? 'favourite ' : ''}sets. ${$('#b-sort').value === 'missing' ? 'Fewest missing pieces first.' : 'Most complete first.'}`;
 }
 for (const id of ['#b-color', '#b-variants', '#b-theme', '#b-sort', '#b-fav']) $(id).addEventListener('change', () => loadBuilds(true));
 for (const id of ['#b-q', '#b-min', '#b-year-min', '#b-year-max']) $(id).addEventListener('input', debounce(() => loadBuilds(true)));
