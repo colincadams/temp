@@ -4,6 +4,7 @@ import Foundation
 let usage = """
 Usage: brick-replay <sweep folder> [--detector colour|truth|maps] [--manifest <manifest.json>] [--out <report.json>] [--match one|frame] [--list] [--depth on|off]
        [--sharpness off|gate|views|on] [--negative-evidence [--miss-rate <r>]] [--consolidate] [--phantoms <n>] [--phantom-seed <n>]
+       [--drift <mm> [--drift-at <frame>]] [--anchors] [--hand [--hand-at <frame>] [--hand-masking]]
 
 Plays a sweep rendered by ml/render_sweep.py through the app's scan pipeline (detect, place on the table, track,
 count once) and compares the pieces it counts with the pieces really on the table.
@@ -20,7 +21,7 @@ count once) and compares the pieces it counts with the pieces really on the tabl
                       phone with LiDAR does
           off         work from the pictures alone, as a phone without LiDAR does (default)
 
-Techniques not yet in the app, off unless asked for (the report file name gains a suffix for each):
+Techniques the app uses, off in the replay unless asked for (the report file name gains a suffix for each):
   --sharpness gate    skip frames much less sharp than the recent ones (SharpnessGate)
               views   fold each piece's region sharpness into its view quality, so its best view is a sharp one
               on      both
@@ -28,6 +29,17 @@ Techniques not yet in the app, off unless asked for (the report file name gains 
   --consolidate       merge tracks that are probably one piece when the scan ends (TrackConsolidation)
   --miss-rate <r>     the detector's miss rate negative evidence assumes (default 0.6 for colour, 0.2 otherwise)
   --phantoms <n>      inject n phantom detections, each in 3 processed frames and never again (--phantom-seed, default 1)
+
+ARKit's map drift (DriftSimulation):
+  --drift <mm>        the reported world starts the sweep drifted by this much (a shift, and a turn of 0.25 degrees per cm),
+                      as after a long scan, plus 1% of the camera's travel; ARKit corrects its map at the middle frame (the
+                      first of the second row) or --drift-at <frame>, and drifts by 1% of travel again after
+  --hand              a hand put down on the table (a 4 cm disc in the middle of the pieces) two thirds of the way through,
+                      or at --hand-at <frame>: it hides the pieces under it, and a fingertip is detected as a piece
+  --hand-masking      use the hand's person mask as the app does: drop detections under it, no misses for hidden pieces
+  --anchors           store each piece against an anchor made near it (AnchorSet) and move it with the anchor, as the app does
+  --anchor-reach <m>, --anchor-travel <m>   how near (default 0.10) and how recently in camera travel (0.15) an anchor
+                      must have been made for a new piece to be stored against it
 """
 
 func fail(_ message: String) -> Never {
@@ -88,6 +100,28 @@ while !arguments.isEmpty {
     case "--phantom-seed":
         guard let n = UInt64(value()) else { fail("--phantom-seed takes a number\n\n\(usage)") }
         settings.phantomSeed = n
+    case "--drift":
+        guard let mm = Float(value()), mm >= 0 else { fail("--drift takes millimetres\n\n\(usage)") }
+        var drift = settings.drift ?? DriftSimulation.Settings()
+        drift.initialDrift = mm / 1000
+        settings.drift = drift
+    case "--drift-at":
+        guard let frame = Int(value()), frame >= 0 else { fail("--drift-at takes a frame number\n\n\(usage)") }
+        var drift = settings.drift ?? DriftSimulation.Settings()
+        drift.correctionFrame = frame
+        settings.drift = drift
+    case "--anchors": settings.anchoring = true
+    case "--anchor-reach":
+        guard let m = Float(value()), m > 0 else { fail("--anchor-reach takes metres\n\n\(usage)") }
+        settings.anchors.reach = m
+    case "--anchor-travel":
+        guard let m = Float(value()), m > 0 else { fail("--anchor-travel takes metres\n\n\(usage)") }
+        settings.anchors.maxTravel = m
+    case "--hand": settings.hand = settings.hand ?? HandSimulation()
+    case "--hand-at":
+        guard let frame = Int(value()), frame >= 0 else { fail("--hand-at takes a frame number\n\n\(usage)") }
+        settings.hand = HandSimulation(firstFrame: frame)
+    case "--hand-masking": settings.handMasking = true
     case "-h", "--help": print(usage); exit(0)
     default:
         guard folderPath == nil, !argument.hasPrefix("-") else { fail("unexpected \(argument)\n\n\(usage)") }
@@ -121,6 +155,14 @@ do {
     print(ReplayScoring.text(report, listPieces: listPieces))
     print("\nHeight: " + (settings.useDepth ? "from the LiDAR depth maps" : "from the pictures alone (no depth)"))
     print(HeightReport.text(HeightReport.bands(report: report, run: run, sweep: folder.sweep)))
+    if let frame = run.driftCorrectionFrame {
+        print(String(format: "\nMap drift: corrected at frame %d; %.1f mm of background drift left at the end (undone before scoring).", frame,
+                     (run.driftAtEnd ?? 0) * 1000))
+        if settings.anchoring { print("Anchors: \(run.anchorsMade) made, \(run.anchorMoves) piece moves applied.") }
+    }
+    if settings.hand != nil {
+        print("\nHand: in \(run.handFrames) processed frames" + (settings.handMasking ? "; \(run.handDropped) detections dropped by the mask." : "."))
+    }
     var suffix = settings.matchWholeFrame ? "-frame" : ""
     if settings.useDepth { suffix += "-depth" }
     if settings.sharpnessGate { suffix += "-sharpgate" }
@@ -128,6 +170,10 @@ do {
     if settings.negativeEvidence { suffix += "-negative" }
     if settings.consolidate { suffix += "-consolidate" }
     if settings.phantoms > 0 { suffix += "-phantoms\(settings.phantoms)" }
+    if let drift = settings.drift { suffix += "-drift\(Int((drift.initialDrift * 1000).rounded()))" }
+    if settings.anchoring { suffix += "-anchors" }
+    if settings.hand != nil { suffix += "-hand" }
+    if settings.handMasking { suffix += "-masked" }
     let out = outPath.map { URL(fileURLWithPath: $0) } ?? folder.url.appendingPathComponent("replay-\(detector.rawValue)\(suffix).json")
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

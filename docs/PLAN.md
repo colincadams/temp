@@ -62,16 +62,16 @@ Room-scanning and 3D-capture apps share a toolkit. Where this app stands against
 | One identity per object in world space, so overlapping passes do not double count | Used; matched per frame, closest pairs first |
 | Live coverage feedback and a "done" signal | Used (coverage map, "looks complete") |
 | Gating frames on camera motion and tilt | Used |
-| Locking white balance during capture | Used |
+| Locking white balance during capture | Used; released when scanning pauses |
 | Depth from LiDAR to place and size objects | In progress (with a geometry-only fallback for phones without LiDAR) |
-| Choosing the sharpest frames (keyframe selection) | In progress |
-| Removing objects that are not seen again when looked for (negative evidence) | In progress |
-| Final clean-up pass after capture | In progress |
-| Anchoring objects so ARKit's drift corrections move them too | Next: pieces are stored as raw world positions, so a long sweep's drift can split one piece into two |
-| Recovering after tracking is lost (interruption, covered camera) | Next: today frames are skipped, but a relocalised world can be shifted |
-| Masking the user's hands (ARKit person segmentation) | Next: a hand in view can become a phantom piece |
-| Locking exposure as well as white balance, with a short shutter | Next: brightness changes shift measured colour; blur hurts recognition |
-| Grabbing a full-resolution still for uncertain pieces | Next: ARKit can capture a high-resolution frame on demand |
+| Choosing the sharpest frames (keyframe selection) | Used: a frame much blurrier than the last few is skipped, and sharp views count most for thumbnails and recognition crops |
+| Removing objects that are not seen again when looked for (negative evidence) | Used, with the miss rate of the detector the app has; a piece comes back if seen again |
+| Final clean-up pass after capture | Used when Review is opened: tracks never seen together that look alike are merged |
+| Anchoring objects so ARKit's drift corrections move them too | Used: each piece is stored against an anchor made near it, and moves when ARKit moves the anchor. In replays with a 1-2 cm map correction, the pieces counted twice over six sweeps went from 214-294 (plus 15-120 phantoms) to none |
+| Recovering after tracking is lost (interruption, covered camera) | Used: a hint for each reason; after an interruption ARKit relocalises before anything is matched, and after 5 s without success the user can keep the pieces found and start a fresh pass |
+| Masking the user's hands (ARKit person segmentation) | Used where ARKit supports it; on LiDAR phones only if ARKit allows it together with depth, which is kept first. Detections under a hand are dropped, and a hidden piece is not counted as missing |
+| Locking exposure as well as white balance, with a short shutter | Used: fixed once settled on the table, with the shutter at most about 1/230 s (2 working pixels of smear at the fastest allowed sweep); in a room too dark for that, auto exposure stays and the light is suggested |
+| Grabbing a full-resolution still for uncertain pieces | Used: a piece still unsure after 3 views gets a still (at most one every 2 s), classified and sent for the second opinion; the video stays 4K |
 | Saving and resuming a scan (ARKit world map) | Later |
 | Coaching overlay while tracking starts | Later (ARKit provides one) |
 | Dense 3D reconstruction (scene mesh, fused depth volume) | Not planned: Lego pieces are smaller than the mesh's detail, and per-piece depth gives what is needed |

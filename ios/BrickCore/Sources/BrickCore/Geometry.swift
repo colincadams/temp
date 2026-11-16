@@ -79,6 +79,17 @@ public struct TableProjector {
         return SIMD3<Float>(p.x, p.y, p.z)
     }
 
+    /// Where a world point appears in the full-resolution image, and its distance along the viewing axis (metres);
+    /// nil if it is behind the camera. The inverse of `unproject`.
+    public func project(_ world: SIMD3<Float>) -> (pixel: SIMD2<Float>, depth: Float)? {
+        let c = camera.columns
+        let p = world - SIMD3<Float>(c.3.x, c.3.y, c.3.z)
+        let right = SIMD3<Float>(c.0.x, c.0.y, c.0.z), up = SIMD3<Float>(c.1.x, c.1.y, c.1.z), back = SIMD3<Float>(c.2.x, c.2.y, c.2.z)
+        let depth = -(p * back).sum()
+        guard depth > 1e-4 else { return nil }
+        return (SIMD2(cx + fx * (p * right).sum() / depth, cy - fy * (p * up).sum() / depth), depth)
+    }
+
     /// Where the camera is in world space.
     public var cameraPosition: SIMD3<Float> {
         SIMD3<Float>(camera.columns.3.x, camera.columns.3.y, camera.columns.3.z)

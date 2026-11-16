@@ -208,6 +208,9 @@ struct PieceSnapshot: Identifiable {
     let thumbnail: Data?
     /// Best match first; scores are averaged over every view of the piece.
     let candidates: [Candidate]
+    /// Found in an earlier pass, before tracking was lost and a fresh pass started: counted and reviewed, but its
+    /// position belongs to the old map, so it is not drawn over the camera view or on the coverage map.
+    var earlierPass = false
 }
 
 // MARK: - Helpers

@@ -72,6 +72,9 @@ public final class TrackedPiece {
     /// Height of the piece's top above the table in millimetres; 0 for a flat piece or while it is not known.
     public internal(set) var heightMm: Float = 0
     public internal(set) var heightSource = HeightSource.none
+    /// The scanning pass the piece was found in (`PieceTracker.startNewPass`). Pieces of earlier passes are kept for the
+    /// count and the review but are never matched again: their positions belong to a world ARKit has since replaced.
+    public internal(set) var pass = 0
 
     /// One recent detection with a known camera, for the height-aware placement (oldest first).
     struct Placement {
@@ -157,6 +160,29 @@ public final class TrackedPiece {
         longSamples.append(observation.longMm)
         shortSamples.append(observation.shortMm)
         rSamples.append(Float(observation.r)); gSamples.append(Float(observation.g)); bSamples.append(Float(observation.b))
+    }
+
+    /// Carry everything stored in world space about this piece by a rigid motion: ARKit corrected its map, and the
+    /// piece's anchor moved with the correction (`PieceAnchoring`). Directions (the levers of its views) turn with it;
+    /// lengths and heights do not change.
+    func apply(_ motion: Matrix4) {
+        position = motion.transformPoint(position)
+        let y = position.y
+        func movePoint(_ p: SIMD2<Float>) -> SIMD2<Float> {
+            let q = motion.transformPoint(SIMD3(p.x, y, p.y))
+            return SIMD2(q.x, q.z)
+        }
+        func turn(_ v: SIMD2<Float>) -> SIMD2<Float> {
+            let w = motion.transformVector(SIMD3(v.x, 0, v.y))
+            return SIMD2(w.x, w.z)
+        }
+        if let base { self.base = movePoint(base) }
+        for i in placements.indices {
+            placements[i].spot = movePoint(placements[i].spot)
+            placements[i].lever = turn(placements[i].lever)
+        }
+        if let camera = lastDeviceCamera { lastDeviceCamera = motion.transformPoint(camera) }
+        if let camera = lastSubmitCamera { lastSubmitCamera = motion.transformPoint(camera) }
     }
 
     /// Record one on-device recognition of this piece.
@@ -253,8 +279,39 @@ public final class PieceTracker {
         self.settings = settings
     }
 
-    /// Pieces seen often enough to count.
+    /// Pieces seen often enough to count, from every pass.
     public var confirmed: [TrackedPiece] { pieces.filter { isConfirmed($0) } }
+
+    /// The pass new pieces belong to, and the only one matched against (`startNewPass`).
+    public private(set) var currentPass = 0
+
+    /// Pieces of the current pass, confirmed or not.
+    public var currentPieces: [TrackedPiece] { pieces.filter { $0.pass == currentPass } }
+
+    /// Confirmed pieces of the current pass: the ones the coverage map, negative evidence and the completion guess are
+    /// about, since only they live in the current world.
+    public var currentConfirmed: [TrackedPiece] { pieces.filter { $0.pass == currentPass && isConfirmed($0) } }
+
+    /// Start a fresh pass after tracking was lost for good: keep every confirmed piece for the count and the review,
+    /// but never match a new detection to one of them again, and drop the unconfirmed ones.
+    /// - Returns: the ids of the pieces dropped.
+    @discardableResult
+    public func startNewPass() -> [UUID] {
+        var removed: [UUID] = []
+        pieces.removeAll { piece in
+            let drop = piece.pass == currentPass && !isConfirmed(piece)
+            if drop { removed.append(piece.id) }
+            return drop
+        }
+        currentPass += 1
+        matched.removeAll()
+        return removed
+    }
+
+    /// Carry a piece by a rigid motion (ARKit moved the anchor it is stored against; see `PieceAnchoring`).
+    public func move(_ piece: TrackedPiece, by motion: Matrix4) {
+        piece.apply(motion)
+    }
 
     public func isConfirmed(_ piece: TrackedPiece) -> Bool { piece.sightings >= settings.confirmAfter }
 
@@ -264,6 +321,7 @@ public final class PieceTracker {
     public func reset() {
         pieces.removeAll()
         matched.removeAll()
+        currentPass = 0
     }
 
     /// Call before the first `observe` of each frame.
@@ -282,7 +340,7 @@ public final class PieceTracker {
 
         var nearest: TrackedPiece?
         var nearestDistance = Float.infinity
-        for piece in pieces where !matched.contains(piece.id) {
+        for piece in pieces where !matched.contains(piece.id) && piece.pass == currentPass {
             if let d = matchDistance(piece, observation), d < nearestDistance { nearest = piece; nearestDistance = d }
         }
         return record(observation, into: nearest, time: time)
@@ -332,7 +390,7 @@ public final class PieceTracker {
         var candidates: [(observation: Int, piece: Int, distance: Float)] = []
         for (o, observation) in observations.enumerated() {
             guard observation.longMm >= settings.minLongMm, observation.longMm <= settings.maxLongMm else { continue }
-            for (p, piece) in pieces.enumerated() where !matched.contains(piece.id) {
+            for (p, piece) in pieces.enumerated() where !matched.contains(piece.id) && piece.pass == currentPass {
                 if let d = matchDistance(piece, observation) { candidates.append((o, p, d)) }
             }
         }
@@ -359,6 +417,7 @@ public final class PieceTracker {
             piece.position = TableMath.mix(piece.position, observation.position, settings.positionBlend)
         } else {
             piece = TrackedPiece(position: observation.position, time: time)
+            piece.pass = currentPass
             pieces.append(piece)
         }
         matched.insert(piece.id)

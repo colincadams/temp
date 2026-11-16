@@ -45,7 +45,8 @@ struct ARScanView: UIViewRepresentable {
         private func sync(_ pieces: [PieceSnapshot]) {
             guard let root = view?.scene.rootNode else { return }
             var live = Set<UUID>()
-            for piece in pieces {
+            // Pieces from before a fresh pass are placed in the old map: no dot for them.
+            for piece in pieces where !piece.earlierPass {
                 live.insert(piece.id)
                 let node: SCNNode
                 if let existing = nodes[piece.id] {
@@ -73,6 +74,8 @@ struct ScanView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(IntroView.shownKey) private var introShown = false
     @State private var reviewing = false
+    /// The cleaned-up list the review sheet shows (`ScanEngine.finishForReview`).
+    @State private var reviewPieces: [PieceSnapshot] = []
     @State private var visible = false
     @State private var camera: AVAuthorizationStatus = AVCaptureDevice.authorizationStatus(for: .video)
     /// Switches to the Settings tab.
@@ -122,8 +125,14 @@ struct ScanView: View {
             if visible { startIfAllowed() }
         }
         .sheet(isPresented: $reviewing) {
-            ReviewView(pieces: engine.pieces, service: API.shared, pending: pending) { engine.reset() }
+            ReviewView(pieces: reviewPieces, service: API.shared, pending: pending) { engine.reset() }
         }
+    }
+
+    /// Opens Review after the end-of-scan clean-up, which merges pieces counted twice.
+    private func openReview() {
+        reviewPieces = engine.finishForReview()
+        reviewing = true
     }
 
     /// The camera starts only after the introduction, so its permission prompt is not the first thing shown.
@@ -147,6 +156,16 @@ struct ScanView: View {
                         .padding(.horizontal, 14).padding(.vertical, 8)
                         .background(.ultraThinMaterial, in: Capsule())
                 }
+                if engine.offerFreshPass {
+                    FreshPassPrompt(keepLooking: { engine.keepTryingToRelocalise() },
+                                    freshPass: { engine.startFreshPass() })
+                } else if let advice = engine.lightAdvice {
+                    Text(advice)
+                        .font(.caption)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                }
                 if let error = engine.lastError {
                     Text(error)
                         .font(.caption)
@@ -158,7 +177,7 @@ struct ScanView: View {
                 Spacer()
                 HStack(alignment: .bottom, spacing: 10) {
                     if engine.coverage.guess != .noPieces {
-                        CoverageStatusView(guess: engine.coverage.guess, canReview: identified > 0) { reviewing = true }
+                        CoverageStatusView(guess: engine.coverage.guess, canReview: identified > 0) { openReview() }
                     }
                     Spacer(minLength: 0)
                     if engine.tableFound || !engine.coverage.cells.isEmpty {
@@ -185,7 +204,7 @@ struct ScanView: View {
                     }
                     .accessibilityElement(children: .combine)
 
-                    Button("Review") { reviewing = true }
+                    Button("Review") { openReview() }
                         .buttonStyle(.borderedProminent)
                         .disabled(identified == 0)
                 }
@@ -202,6 +221,30 @@ struct ScanView: View {
                 UIAccessibility.post(notification: .announcement, argument: text)
             }
         }
+    }
+}
+
+/// Shown when the camera lost track of where the scan was and ARKit could not find its place again.
+private struct FreshPassPrompt: View {
+    let keepLooking: () -> Void
+    let freshPass: () -> Void
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Label("Lost track of the table", systemImage: "exclamationmark.triangle")
+                .font(.subheadline.weight(.semibold))
+            Text("The camera cannot find where the scan left off. The pieces found so far are kept for review. Start a fresh pass over the table, or point the phone back at where you were scanning.")
+                .font(.caption)
+                .multilineTextAlignment(.center)
+            HStack(spacing: 12) {
+                Button("Keep looking", action: keepLooking)
+                    .buttonStyle(.bordered)
+                Button("Start a fresh pass", action: freshPass)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 }
 
@@ -269,6 +312,11 @@ private struct CameraDeniedView: View {
 #if DEBUG
 #Preview("Camera not allowed") {
     CameraDeniedView()
+}
+
+#Preview("Lost track") {
+    FreshPassPrompt(keepLooking: { }, freshPass: { })
+        .padding()
 }
 
 #Preview("Server not found") {

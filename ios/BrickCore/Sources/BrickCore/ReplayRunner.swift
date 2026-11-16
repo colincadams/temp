@@ -97,7 +97,7 @@ public enum ReplayRunner {
         public var useDepth = false
         public var depth = DepthHeight.Settings()
 
-        // Techniques measured with the replay before they are wired into the app (each off by default).
+        // Techniques the app uses, each off by default here so its effect can be measured.
 
         /// Skip frames much less sharp than the recent ones (`SharpnessGate.admit`).
         public var sharpnessGate = false
@@ -120,6 +120,17 @@ public enum ReplayRunner {
         /// Motion blur of each frame in working pixels, from sweep.json's `blurPx` (render_sweep.py --motion-blur);
         /// read by `run(folder:)` when nil. Only reported, never used by the pipeline.
         public var frameBlurPx: [Float]?
+        /// Simulate ARKit's map drift and a map correction mid-sweep (`DriftSimulation`); nil: the poses are exact.
+        public var drift: DriftSimulation.Settings?
+        /// Store each piece against an anchor made near it and carry it when ARKit moves the anchor, as the app does
+        /// (`AnchorSet`, `PieceAnchoring`). Only makes a difference with `drift`.
+        public var anchoring = false
+        public var anchors = AnchorSet.Settings()
+        /// Simulate the user's hand over part of the view for some frames (`HandSimulation`); nil: no hand.
+        public var hand: HandSimulation?
+        /// Use the hand's person mask as the app does (`HandMasking`): drop detections under it, and record no misses
+        /// for pieces it hides.
+        public var handMasking = false
 
         public init() {}
     }
@@ -194,6 +205,15 @@ public enum ReplayRunner {
         public var phantomsPlaced = 0
         /// Merges made by the end-of-scan consolidation.
         public var consolidationMerges = 0
+        /// With drift: the sweep frame at which the map was corrected, and the drift there and at the end (metres).
+        public var driftCorrectionFrame: Int?
+        public var driftAtEnd: Float?
+        /// With anchoring: anchors made, and piece corrections applied (one per piece per anchor move).
+        public var anchorsMade = 0
+        public var anchorMoves = 0
+        /// With a hand: processed frames it was in, and detections dropped by the mask.
+        public var handFrames = 0
+        public var handDropped = 0
     }
 
     public static let skippedTooSoon = "less than the frame interval after the last processed frame"
@@ -236,14 +256,27 @@ public enum ReplayRunner {
         /// Each piece's best view so far: its quality and the frame it came from.
         var bestView: [UUID: (quality: Float, frame: Int)] = [:]
         var frameSeconds = 0.0, regionSeconds = 0.0, timedFrames = 0
+        var drift = settings.drift.map { DriftSimulation(sweep: sweep, settings: $0) }
+        var anchorSet = AnchorSet(settings: settings.anchors)
+        var anchoring = PieceAnchoring()
+        var anchorMoves = 0
+        var handFrames = 0, handDropped = 0
+        let hand = settings.hand.map { $0.resolved(for: sweep) }
 
         for (index, frame) in sweep.frames.enumerated() {
             var result = FrameResult(file: frame.file, time: frame.time, skipped: nil, detections: 0, observations: 0, wholePieces: [])
             result.blurPx = settings.frameBlurPx.flatMap { index < $0.count ? $0[index] : nil }
-            guard let projector = sweep.projector(frame) else {
+            guard let trueProjector = sweep.projector(frame) else {
                 result.skipped = skippedNoPose
                 frames.append(result)
                 continue
+            }
+            // The pose ARKit reports: the true one, or the drifted one when drift is simulated.
+            var projector = trueProjector
+            if drift != nil {
+                drift!.advance(frame: index, camera: trueProjector.cameraPosition)
+                projector = TableProjector(fx: trueProjector.fx, fy: trueProjector.fy, cx: trueProjector.cx, cy: trueProjector.cy,
+                                           camera: drift!.reported(trueProjector.camera), tableY: trueProjector.tableY)
             }
             let camera = projector.camera
             let position = SIMD3<Float>(camera.columns.3.x, camera.columns.3.y, camera.columns.3.z)
@@ -303,13 +336,39 @@ public enum ReplayRunner {
                 blobs = try groupMaps(data, frame: frame, work: work, settings: settings)
             }
             if !phantoms.isEmpty {
-                let injected = phantomBlobs(&phantoms, projector: projector, sweep: sweep, settings: settings)
+                let injected = phantomBlobs(&phantoms, projector: trueProjector, sweep: sweep, settings: settings)
                 result.phantoms = injected.count
                 blobs += injected
+            }
+            // The user's hand resting on the table: it hides the pieces under it, and a fingertip is detected as a piece.
+            var handMask: PersonMask?
+            if let hand, hand.covers(frame: index),
+               let mask = hand.mask(projector: trueProjector, imageWidth: Float(sweep.width), imageHeight: Float(sweep.height)) {
+                handMask = mask
+                handFrames += 1
+                blobs = blobs.filter { mask.share(of: $0, step: work.step, imageWidth: Float(sweep.width), imageHeight: Float(sweep.height)) < 0.5 }
+                if let fingertip = hand.fingertip(projector: trueProjector, work: work) { blobs.append(fingertip) }
+                if settings.handMasking {
+                    let filtered = HandMasking.filter(blobs, mask: mask, step: work.step, imageWidth: Float(sweep.width),
+                                                      imageHeight: Float(sweep.height))
+                    blobs = filtered.kept
+                    handDropped += filtered.dropped
+                }
             }
 
             let step = Float(work.step)
             let depthMap = settings.useDepth ? try depth?(index) : nil
+            // ScanEngine.applyAnchorCorrections: carry pieces whose anchor ARKit moved.
+            if settings.anchoring, let drift {
+                anchorSet.moveCamera(to: position)
+                for correction in anchoring.corrections(current: drift.reportedAnchors) {
+                    for id in correction.pieces {
+                        guard let piece = tracker.piece(id: id) else { continue }
+                        tracker.move(piece, by: correction.motion)
+                        anchorMoves += 1
+                    }
+                }
+            }
             tracker.beginFrame()
             var observations: [PieceObservation] = []
             var matched: [TrackedPiece?] = []
@@ -348,14 +407,35 @@ public enum ReplayRunner {
             result.observations = matched.compactMap { $0 }.count
             let matchedIDs = matched.compactMap { $0?.id }
             if settings.negativeEvidence {
+                let occluded = settings.handMasking
+                    ? HandMasking.occluded(pieces: tracker.pieces, projector: projector, mask: handMask,
+                                           imageWidth: Float(sweep.width), imageHeight: Float(sweep.height))
+                    : []
                 ledger.record(view: projector, imageWidth: Float(sweep.width), imageHeight: Float(sweep.height),
-                              inset: settings.coverageInset, pieces: tracker.pieces, matched: Set(matchedIDs))
+                              inset: settings.coverageInset, pieces: tracker.pieces, matched: Set(matchedIDs), occluded: occluded)
             }
             log.record(frame: matchedIDs)
+            // ScanEngine.anchorNewPieces: each new piece is stored against its square's anchor, made if need be.
+            if settings.anchoring, drift != nil {
+                for piece in matched.compactMap({ $0 }) where anchoring.anchorOf[piece.id] == nil {
+                    let id: UUID
+                    if let existing = anchorSet.anchor(for: piece.position) {
+                        id = existing
+                    } else {
+                        // Numbered, so a replay is the same every time.
+                        id = UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", anchorSet.anchors.count + 1))!
+                        let transform = anchorSet.anchorTransform(for: piece.position, tableY: projector.tableY)
+                        anchorSet.register(id, at: transform)
+                        drift!.addAnchor(id, transform: transform)
+                    }
+                    anchoring.bind(piece: piece.id, to: id, transform: drift!.reportedAnchors[id]!)
+                }
+            }
             for id in tracker.endFrame(time: time) {
                 ledger.forget(id)
                 log.forget(id)
                 bestView[id] = nil
+                anchoring.forget(piece: id)
             }
             result.detections = blobs.count
 
@@ -365,7 +445,7 @@ public enum ReplayRunner {
                 whole = ReplayTruthDetector.wholePieces(ids: ids, width: work.width, height: work.height)
             } else {
                 usedMaps = false
-                whole = Set(sweep.pieces.filter { inView($0, projector: projector, sweep: sweep) }.map { $0.id })
+                whole = Set(sweep.pieces.filter { inView($0, projector: trueProjector, sweep: sweep) }.map { $0.id })
             }
             result.wholePieces = whole.sorted()
             for id in whole { wholeFrames[id, default: 0] += 1 }
@@ -379,8 +459,11 @@ public enum ReplayRunner {
             absorbed = TrackConsolidation.plan(pieces: candidates, log: log, settings: settings.consolidation).absorbed
         }
 
+        // Scored in the true world: undo the drift the reported world has at the end (what remains is the app's error).
+        let toTrue = drift?.drift.rigidInverse ?? .identity
         let tracked = tracker.pieces.map { piece in
-            var row = TrackedResult(x: piece.position.x, z: piece.position.z, longMm: piece.longMm, shortMm: piece.shortMm,
+            let position = toTrue.transformPoint(piece.position)
+            var row = TrackedResult(x: position.x, z: position.z, longMm: piece.longMm, shortMm: piece.shortMm,
                                     rgb: piece.rgbHex, sightings: piece.sightings, confirmed: tracker.isConfirmed(piece),
                                     heightMm: piece.heightMm, heightSource: piece.heightSource,
                                     doubtful: settings.negativeEvidence && ledger.isDoubtful(piece.id),
@@ -401,6 +484,16 @@ public enum ReplayRunner {
         if settings.negativeEvidence { techniques.append("negative evidence") }
         if settings.consolidate { techniques.append("consolidation") }
         if settings.phantoms > 0 { techniques.append("\(phantoms.count) phantoms injected") }
+        if let drift {
+            techniques.append(String(format: "map drift of %.0f mm, corrected at frame %d",
+                                     drift.settings.initialDrift * 1000, drift.correctionFrame))
+        }
+        if settings.anchoring && drift != nil { techniques.append("anchors") }
+        if let hand {
+            techniques.append(String(format: "a hand on the table at (%.0f, %.0f) mm from frame %d", (hand.position?.x ?? 0) * 1000,
+                                     (hand.position?.y ?? 0) * 1000, hand.firstFrame))
+            if settings.handMasking { techniques.append("hand masking") }
+        }
         var run = Run(frames: frames, tracked: tracked, wholeFrames: wholeFrames,
                       visibilityMethod: usedMaps ? "piece maps" : "geometry",
                       matching: settings.matchWholeFrame ? "whole frame" : "one at a time")
@@ -410,6 +503,14 @@ public enum ReplayRunner {
         if settings.sharpnessViews, processed > 0 { run.sharpnessRegionsMs = regionSeconds * 1000 / Double(processed) }
         run.phantomsPlaced = phantoms.count
         run.consolidationMerges = absorbed.count
+        if let drift {
+            run.driftCorrectionFrame = drift.correctionFrame
+            run.driftAtEnd = TableMath.distance(drift.drift.transformPoint(SIMD3(0, sweep.tableY, 0)), SIMD3(0, sweep.tableY, 0))
+            run.anchorsMade = anchorSet.anchors.count
+            run.anchorMoves = anchorMoves
+        }
+        run.handFrames = handFrames
+        run.handDropped = handDropped
         return run
     }
 
@@ -508,12 +609,7 @@ public enum ReplayRunner {
 
     /// Where a world point appears in the full-resolution image, or nil if it is behind the camera.
     static func imagePoint(_ world: SIMD3<Float>, projector: TableProjector) -> SIMD2<Float>? {
-        let c = projector.camera.columns
-        let p = world - SIMD3<Float>(c.3.x, c.3.y, c.3.z)
-        let right = SIMD3<Float>(c.0.x, c.0.y, c.0.z), up = SIMD3<Float>(c.1.x, c.1.y, c.1.z), back = SIMD3<Float>(c.2.x, c.2.y, c.2.z)
-        let depth = -(p * back).sum()
-        guard depth > 1e-4 else { return nil }
-        return SIMD2(projector.cx + projector.fx * (p * right).sum() / depth, projector.cy - projector.fy * (p * up).sum() / depth)
+        projector.project(world)?.pixel
     }
 
     /// The app's InstanceDetector after the network: same input size check, padding rows and grouping thresholds.

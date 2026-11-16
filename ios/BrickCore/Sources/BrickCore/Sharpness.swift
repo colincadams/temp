@@ -1,6 +1,6 @@
 import Foundation
 
-// How ScanEngine should use this (in `process(frame:...)`, after `downsample` and before detection):
+// How ScanEngine uses this (in `process(frame:...)`, after `downsample` and before detection):
 //
 //     private var sharpness = SharpnessGate()                     // engine state; `sharpness.reset()` in reset()
 //

@@ -1,6 +1,6 @@
 import Foundation
 
-// How ScanEngine should use this:
+// How ScanEngine uses this (`ScanEngine.consolidate`, run by `finishForReview` when Review is opened):
 //
 //     private var observationLog = ObservationLog()               // engine state; `observationLog.reset()` in reset()
 //
@@ -17,7 +17,9 @@ import Foundation
 //     // and say "Merged \(result.merges.count) pieces counted twice" if any.
 //
 // The tracker itself is not changed: an absorbed piece stays in `PieceTracker.pieces` (there is no removal API), so
-// keep `result.absorbed` and filter with it, or run the plan again, whenever the list is rebuilt.
+// keep `result.absorbed` and filter with it, or run the plan again, whenever the list is rebuilt. The app plans each
+// scanning pass on its own (positions of different passes are in different worlds), and un-merges a pair if the two
+// are later detected in the same frame.
 
 /// Which tracked pieces were detected in which processed frames: the evidence that keeps two real pieces apart.
 ///

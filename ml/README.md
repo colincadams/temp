@@ -74,9 +74,9 @@ swift run -c release brick-replay ../../ml/sweeps/001 --detector truth --depth o
 
 The report then also breaks the results down by the pieces' true height (under 6, 6-10, 10-20 and 20+ mm): found, counted twice, merged, measured over true length, and the height the tracker estimated against the true one. The depth maps are `NNNN.depth` (256 x 192 float32 metres along the viewing axis, rows top to bottom, the picture's field of view, as ARKit's `sceneDepth`) and `NNNN.conf` (one ARConfidenceLevel byte per pixel). They are made from Blender's exact depth with a LiDAR-like noise model (`phone_depth` in `render_sweep.py`): box-averaged to 256 x 192, so edges mix piece and table; noise of 1 cm standard deviation at 30 cm growing with the square of the distance, part independent per pixel and part smooth over a few pixels; confidence medium or low at depth steps; dark pieces noisier and partly medium confidence; transparent pieces partly seen through and low confidence; and a few outliers, some of them still marked high confidence.
 
-### Techniques measured before they go into the app
+### Techniques from continuous-scanning apps
 
-Three techniques from continuous-scanning apps live in BrickCore, tested, but are not yet wired into `ScanEngine` (each source file starts with the calls it should make). The replay switches them on one by one; the report says what each did, and the file name of the JSON report gains a suffix per option.
+Each of these lives in BrickCore, tested, and is wired into `ScanEngine` (each source file starts with the calls it makes). The replay switches them on one by one, so their effect can be measured; the report says what each did, and the file name of the JSON report gains a suffix per option. The app always runs sharpness, negative evidence and consolidation (with the miss rate of the detector it has: 0.2 with the trained detector, 0.6 with the colour threshold), anchors, and hand masking where ARKit offers person segmentation.
 
 ```sh
 swift run -c release brick-replay <sweep> --detector truth --match frame --sharpness on       # gate | views | on
@@ -124,6 +124,27 @@ The 3 survivors lay near the table's far edge (125-130 mm from its middle), whic
 | one-at-a-time matching | 4 / 5 | 2 / 4 | 2 / 1 | 0 |
 
 The colour threshold's doubles were not merged (0 merges, 0 wrong). The merged double is an upright 48 mm bar measured from its lit and its shaded side; every remaining double was, in some frame, matched by a neighbour's detection while its twin was detected, so the rule cannot touch it: that is a tracking fault to fix in the tracker.
+
+**Anchors against map drift (`Anchoring.swift`, `ReplayDrift.swift`).** ARKit's world drifts as the camera travels and is corrected when ARKit refines its map (a loop closure), which moves the world under positions stored earlier. The app stores each piece against an `ARAnchor` made near it (within 10 cm, made no more than 15 cm of camera travel before: an anchor is tied to the map as it was when it was made, so it can only carry a piece placed in the same state of the map) and, each frame before matching, moves every piece by the change in its anchor's transform. (Sharing anchors as a coarse grid would, any anchor within 20 cm however long ago it was made, does as well on these sweeps: `--anchors --anchor-reach 0.2 --anchor-travel 100` also gives 785 pieces and no doubles, with 2-4 anchors, because the simulated drift is the same over the whole first row. The travel limit is for real drift, which builds up while the camera keeps coming back over the same ground.) `--drift <mm>` starts the sweep with the reported world already drifted that much (a shift, and 0.25 degrees of turn per cm: a rendered sweep's 65 cm of travel is too short to build up drift itself, so it stands for a phone that has come a few metres), adds 1% of the camera's travel, and corrects the map at the first frame of the second row (`--drift-at`); anchors are then moved to their true place give or take 0.5 mm and 0.1 degrees. `--anchors` stores the pieces against anchors as the app does. Positions are scored after undoing the background drift left at the end.
+
+| sweeps 1-4, t5, t6 (785 pieces in the fair set) | counted | counted twice | phantom |
+| --- | --- | --- | --- |
+| truth, no drift | 785 | 0 | 0 |
+| truth, 10 mm drift | 1089 | 294 | 15 |
+| truth, 20 mm drift | 1118 | 222 | 120 |
+| maps (ideal), 10 mm drift | 1091 | 276 | 36 |
+| maps (ideal), 20 mm drift | 1115 | 214 | 120 |
+| any of these, `--anchors` | 785 | 0 | 0 |
+
+With anchors, 4-12 anchors were made per sweep (one per 10 cm of table the first pieces of each stretch of the sweep were found on), and the position error was 1.3-2.3 mm against 0.7-1.0 mm without drift (the background drift left over). Not modelled: a correction that comes some frames after the camera is back over old ground; in those frames the tracker starts second tracks, which anchors cannot prevent (consolidation may merge them at review).
+
+**Hand masking (`PersonMask.swift`, `ReplayHand.swift`).** `--hand` puts a hand down on the table two thirds of the way through the sweep (a 4 cm disc in the middle of the pieces, `--hand-at <frame>`): it hides the pieces under it, and a fingertip at its edge is detected as a 16 x 10 mm piece. Its person mask is the pixels whose ray meets the disc, at 64 x 48. `--hand-masking` uses it as the app does: detections a quarter or more under the mask are dropped, and a tracked piece whose box (its length plus 5 mm a side) is 5% or more under it gets no miss.
+
+| sweeps 1-4, t5, t6, truth | real pieces lost | fingertip counted |
+| --- | --- | --- |
+| hand, no negative evidence | 0 | in 5 of 6 sweeps (twice as a phantom, three times beside a real piece, scored as that piece counted twice) |
+| hand, `--negative-evidence` | 41 (17 on sweep 2) | in 4 of 6 |
+| hand, `--negative-evidence --hand-masking` | 0 | never |
 
 Each frame is stored for the tool as raw pixels at the detector's working size (`NNNN.rgba`, every `step`-th pixel as the app downsamples, `step` = width / 640), next to `NNNN.ids` (piece numbers, 16-bit) and `NNNN.maps` (detector output, 4 float32 planes of 320 x 240). For a sweep rendered before these existed, run `python3 ml/sweep_frames.py <sweep folder>`; true sizes then come from `--manifest ml/manifest.json`.
 

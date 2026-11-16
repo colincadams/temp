@@ -1,6 +1,6 @@
 import Foundation
 
-// How ScanEngine should use this (in `process(frame:...)`, right after matching and before `tracker.endFrame`):
+// How ScanEngine uses this (in `process(frame:...)`, right after matching and before `tracker.endFrame`):
 //
 //     private var visibility = VisibilityLedger()                 // engine state; `visibility.reset()` in reset()
 //     // Without the trained detector (`instanceDetector == nil`) the colour threshold misses far more pieces:
@@ -8,8 +8,11 @@ import Foundation
 //
 //     let matchedPieces = tracker.observe(frame: ..., time: time)
 //     let resolution = frame.camera.imageResolution
+//     // Only the current pass's pieces (`PieceTracker.currentPieces`) are in this world; pieces under the user's hand
+//     // (`HandMasking.occluded`) were not looked at.
 //     visibility.record(view: projector, imageWidth: Float(resolution.width), imageHeight: Float(resolution.height),
-//                       inset: coverageInset, pieces: tracker.pieces, matched: Set(matchedPieces.compactMap { $0?.id }))
+//                       inset: coverageInset, pieces: tracker.currentPieces, matched: Set(matchedPieces.compactMap { $0?.id }),
+//                       occluded: occluded)
 //     for id in tracker.endFrame(time: time) { visibility.forget(id); ... }
 //
 // and wherever the confirmed pieces are counted or shown (`publish`, the review list, the "looks complete" guess):
@@ -101,14 +104,16 @@ public struct VisibilityLedger {
     ///   - inset: share of each image edge left out, as for `CoverageMap.add(view:...)`.
     ///   - pieces: every tracked piece (`PieceTracker.pieces`).
     ///   - matched: ids of the pieces a detection matched in this frame (new pieces included).
+    ///   - occluded: pieces this frame cannot have seen although their spot is in view (a hand over them, `PersonMask`):
+    ///     no miss for them.
     public mutating func record(view projector: TableProjector, imageWidth: Float, imageHeight: Float, inset: Float = 0.05,
-                                pieces: [TrackedPiece], matched: Set<UUID>) {
+                                pieces: [TrackedPiece], matched: Set<UUID>, occluded: Set<UUID> = []) {
         let footprint = CoverageMap.footprint(of: projector, imageWidth: imageWidth, imageHeight: imageHeight,
                                               inset: inset, maxDepth: settings.maxDepth)
         for piece in pieces {
             if matched.contains(piece.id) {
                 hit(piece.id)
-            } else {
+            } else if !occluded.contains(piece.id) {
                 let margin = piece.longMm / 2000 + settings.edgeMargin
                 if VisibilityLedger.contains(footprint, SIMD2(piece.position.x, piece.position.z), margin: margin) {
                     miss(piece.id)
