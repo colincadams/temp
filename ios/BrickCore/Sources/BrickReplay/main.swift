@@ -2,7 +2,7 @@ import BrickCore
 import Foundation
 
 let usage = """
-Usage: brick-replay <sweep folder> [--detector colour|truth|maps] [--manifest <manifest.json>] [--out <report.json>] [--match one|frame] [--list]
+Usage: brick-replay <sweep folder> [--detector colour|truth|maps] [--manifest <manifest.json>] [--out <report.json>] [--match one|frame] [--list] [--depth on|off]
 
 Plays a sweep rendered by ml/render_sweep.py through the app's scan pipeline (detect, place on the table, track,
 count once) and compares the pieces it counts with the pieces really on the table.
@@ -15,6 +15,9 @@ count once) and compares the pieces it counts with the pieces really on the tabl
   --match one         match each detection to known pieces one at a time, as the app does (default)
           frame       match a frame's detections all at once, closest pairs first (PieceTracker.observe(frame:))
   --list              also list every piece
+  --depth on          measure each piece's height from the sweep's LiDAR depth maps (render_sweep.py --depth), as a
+                      phone with LiDAR does
+          off         work from the pictures alone, as a phone without LiDAR does (default)
 """
 
 func fail(_ message: String) -> Never {
@@ -49,6 +52,12 @@ while !arguments.isEmpty {
         default: fail("--match takes one or frame\n\n\(usage)")
         }
     case "--list": listPieces = true
+    case "--depth":
+        switch value() {
+        case "on": settings.useDepth = true
+        case "off": settings.useDepth = false
+        default: fail("--depth takes on or off\n\n\(usage)")
+        }
     case "-h", "--help": print(usage); exit(0)
     default:
         guard folderPath == nil, !argument.hasPrefix("-") else { fail("unexpected \(argument)\n\n\(usage)") }
@@ -78,7 +87,10 @@ do {
     let run = try ReplayRunner.run(folder: folder, detector: detector, settings: settings)
     let report = ReplayScoring.report(sweep: folder.sweep, run: run, detector: detector, catalogSize: catalogSize)
     print(ReplayScoring.text(report, listPieces: listPieces))
-    let out = outPath.map { URL(fileURLWithPath: $0) } ?? folder.url.appendingPathComponent("replay-\(detector.rawValue)\(settings.matchWholeFrame ? "-frame" : "").json")
+    print("\nHeight: " + (settings.useDepth ? "from the LiDAR depth maps" : "from the pictures alone (no depth)"))
+    print(HeightReport.text(HeightReport.bands(report: report, run: run, sweep: folder.sweep)))
+    let out = outPath.map { URL(fileURLWithPath: $0) } ?? folder.url.appendingPathComponent(
+        "replay-\(detector.rawValue)\(settings.matchWholeFrame ? "-frame" : "")\(settings.useDepth ? "-depth" : "").json")
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     try encoder.encode(report).write(to: out)

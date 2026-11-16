@@ -92,6 +92,10 @@ public enum ReplayRunner {
         /// The app's `InstanceDetector`: network input size, output stride and grouping thresholds.
         public var mapsInputWidth = 640, mapsInputHeight = 480, mapsStride = 2
         public var pieceThreshold: Float = 0.5, peakThreshold: Float = 0.3, mapsMinArea = 6
+        /// Read each frame's LiDAR depth map (`NNNN.depth`, `NNNN.conf`; `ml/render_sweep.py --depth`) and measure
+        /// each piece's height from it (`DepthHeight`), as the app does on a phone with LiDAR.
+        public var useDepth = false
+        public var depth = DepthHeight.Settings()
 
         public init() {}
     }
@@ -116,10 +120,15 @@ public enum ReplayRunner {
         public var rgb: String
         public var sightings: Int
         public var confirmed: Bool
+        /// The tracker's estimate of the piece's height (mm, 0 = flat or unknown) and where it came from.
+        public var heightMm: Float?
+        public var heightSource: HeightSource?
 
-        public init(x: Float, z: Float, longMm: Float, shortMm: Float, rgb: String, sightings: Int, confirmed: Bool) {
+        public init(x: Float, z: Float, longMm: Float, shortMm: Float, rgb: String, sightings: Int, confirmed: Bool,
+                    heightMm: Float? = nil, heightSource: HeightSource? = nil) {
             self.x = x; self.z = z; self.longMm = longMm; self.shortMm = shortMm; self.rgb = rgb
             self.sightings = sightings; self.confirmed = confirmed
+            self.heightMm = heightMm; self.heightSource = heightSource
         }
     }
 
@@ -146,14 +155,16 @@ public enum ReplayRunner {
         if detector == .truth && !useIDs {
             throw ReplayError("the truth detector needs piece-number maps; render the sweep with --ids")
         }
-        return try run(sweep: folder.sweep, detector: detector, settings: settings) { index in
+        let depthFiles = settings.useDepth ? try DepthReplayFiles(folder: folder) : nil
+        return try run(sweep: folder.sweep, detector: detector, settings: settings, load: { index in
             try folder.load(frame: index, ids: useIDs, maps: detector == .maps)
-        }
+        }, depth: depthFiles.map { files in { index in try files.load(frame: index) } })
     }
 
     /// Replay a sweep whose frames come from `load` (by frame index).
+    /// - Parameter depth: each frame's depth map by frame index, read when `settings.useDepth`.
     public static func run(sweep: ReplaySweep, detector: ReplayDetector, settings: Settings = Settings(),
-                           load: (Int) throws -> ReplayFrameData) throws -> Run {
+                           load: (Int) throws -> ReplayFrameData, depth: ((Int) throws -> DepthMap)? = nil) throws -> Run {
         let work = sweep.work
         let tracker = PieceTracker(settings: settings.tracker)
         var frames: [FrameResult] = []
@@ -217,12 +228,18 @@ public enum ReplayRunner {
             }
 
             let step = Float(work.step)
+            let depthMap = settings.useDepth ? try depth?(index) : nil
             tracker.beginFrame()
             var observations: [PieceObservation] = []
             for blob in blobs {
                 guard let spot = projector.locate(workX: blob.cx, workY: blob.cy, step: step) else { continue }
                 let quality = PieceTracker.viewQuality(of: blob, frameWidth: work.width, frameHeight: work.height)
-                let observation = PieceObservation(blob: blob, position: spot.position, mmPerPixel: spot.mmPerPixel, quality: quality)
+                let depthHeight = depthMap.flatMap {
+                    DepthHeight.heightMm(map: $0, blob: blob, step: step, imageWidth: Float(sweep.width), imageHeight: Float(sweep.height),
+                                         projector: projector, settings: settings.depth)
+                }
+                let observation = PieceObservation(blob: blob, position: spot.position, mmPerPixel: spot.mmPerPixel, quality: quality,
+                                                   cameraPosition: position, depthHeightMm: depthHeight)
                 if settings.matchWholeFrame {
                     observations.append(observation)
                 } else if tracker.observe(observation, time: time) != nil {   // as ScanEngine does, one detection at a time
@@ -250,7 +267,8 @@ public enum ReplayRunner {
 
         let tracked = tracker.pieces.map { piece in
             TrackedResult(x: piece.position.x, z: piece.position.z, longMm: piece.longMm, shortMm: piece.shortMm,
-                          rgb: piece.rgbHex, sightings: piece.sightings, confirmed: tracker.isConfirmed(piece))
+                          rgb: piece.rgbHex, sightings: piece.sightings, confirmed: tracker.isConfirmed(piece),
+                          heightMm: piece.heightMm, heightSource: piece.heightSource)
         }
         return Run(frames: frames, tracked: tracked, wholeFrames: wholeFrames,
                    visibilityMethod: usedMaps ? "piece maps" : "geometry",
