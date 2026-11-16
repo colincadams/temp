@@ -13,21 +13,41 @@ public struct PieceObservation {
     public var b: UInt8
     /// How good a picture of the piece this frame is; see `PieceTracker.viewQuality`.
     public var quality: Float
+    /// Where the camera was, in world space. Lets the tracker allow for the piece's height (`HeightGeometry`);
+    /// without it the piece is taken as flat, as before.
+    public var cameraPosition: SIMD3<Float>?
+    /// The piece's height above the table measured from LiDAR depth in this frame (`DepthHeight`), millimetres;
+    /// nil without depth, or when too few depth pixels were usable.
+    public var depthHeightMm: Float?
 
-    public init(position: SIMD3<Float>, longMm: Float, shortMm: Float, r: UInt8, g: UInt8, b: UInt8, quality: Float) {
+    public init(position: SIMD3<Float>, longMm: Float, shortMm: Float, r: UInt8, g: UInt8, b: UInt8, quality: Float,
+                cameraPosition: SIMD3<Float>? = nil, depthHeightMm: Float? = nil) {
         self.position = position
         self.longMm = longMm
         self.shortMm = shortMm
         self.r = r; self.g = g; self.b = b
         self.quality = quality
+        self.cameraPosition = cameraPosition
+        self.depthHeightMm = depthHeightMm
     }
 
     /// - Parameters:
     ///   - mmPerPixel: scale at the blob, from `TableProjector.locate`.
-    public init(blob: DetectedBlob, position: SIMD3<Float>, mmPerPixel: Float, quality: Float) {
+    public init(blob: DetectedBlob, position: SIMD3<Float>, mmPerPixel: Float, quality: Float,
+                cameraPosition: SIMD3<Float>? = nil, depthHeightMm: Float? = nil) {
         self.init(position: position, longMm: blob.major * mmPerPixel, shortMm: blob.minor * mmPerPixel,
-                  r: blob.r, g: blob.g, b: blob.b, quality: quality)
+                  r: blob.r, g: blob.g, b: blob.b, quality: quality, cameraPosition: cameraPosition, depthHeightMm: depthHeightMm)
     }
+}
+
+/// How a piece's height was worked out.
+public enum HeightSource: String, Codable {
+    /// Not enough to go on yet: taken as flat.
+    case none
+    /// From LiDAR depth (median over its frames).
+    case depth
+    /// From how its detected spot slid as the camera moved (`HeightGeometry.fitLift`).
+    case views
 }
 
 /// A piece followed across frames. Created and owned by `PieceTracker`.
@@ -49,6 +69,24 @@ public final class TrackedPiece {
     public internal(set) var bSamples: [Float] = []
     /// Best `PieceObservation.quality` seen so far.
     public internal(set) var bestQuality: Float = 0
+    /// Height of the piece's top above the table in millimetres; 0 for a flat piece or while it is not known.
+    public internal(set) var heightMm: Float = 0
+    public internal(set) var heightSource = HeightSource.none
+
+    /// One recent detection with a known camera, for the height-aware placement (oldest first).
+    struct Placement {
+        var spot: SIMD2<Float>
+        var lever: SIMD2<Float>
+        var depthHeightMm: Float?
+    }
+    var placements: [Placement] = []
+    /// Camera height above the table for each of `longSamples` (0 when not known), for the scale correction.
+    var sampleCameraHeights: [Float] = []
+    /// Metres above the table of the outline's middle (`HeightGeometry`), and the base it gives (x, z).
+    var lift: Float = 0
+    var base: SIMD2<Float>?
+    /// Height (metres) at which the outline is measured, for `longMm` and `shortMm`.
+    var scaleHeight: Float = 0
 
     // MARK: Recognition bookkeeping
 
@@ -77,9 +115,25 @@ public final class TrackedPiece {
         self.firstSeen = time
     }
 
-    /// Median of the recent measurements.
-    public var longMm: Float { TableMath.median(longSamples) }
-    public var shortMm: Float { TableMath.median(shortSamples) }
+    /// Median of the recent measurements, measured at the piece's height rather than the table's when it stands up
+    /// off the table (`HeightGeometry.scale`).
+    public var longMm: Float { TableMath.median(scaled(longSamples)) }
+    public var shortMm: Float { TableMath.median(scaled(shortSamples)) }
+    /// The same, as measured on the table plane.
+    public var tableLongMm: Float { TableMath.median(longSamples) }
+
+    private func scaled(_ samples: [Float]) -> [Float] {
+        guard scaleHeight > 0, sampleCameraHeights.count == samples.count else { return samples }
+        let all = zip(samples, sampleCameraHeights).map { $0 * HeightGeometry.scale(cameraHeight: $1, height: scaleHeight) }
+        guard minSteepViews > 0, sampleLevers.count == samples.count, samples.count >= 2 * minSteepViews else { return all }
+        // The views most nearly from straight above show the least of the piece's side.
+        let order = sampleLevers.indices.sorted { sampleLevers[$0] < sampleLevers[$1] }
+        return order.prefix(max(minSteepViews, samples.count / 2)).map { all[$0] }
+    }
+    /// Length of the lever (`HeightGeometry.lever`) for each of `longSamples` (when known), and how few views from
+    /// nearest straight above to measure a tall piece from.
+    var sampleLevers: [Float] = []
+    var minSteepViews = 3
 
     /// Median colour as "rrggbb".
     public var rgbHex: String {
@@ -91,6 +145,14 @@ public final class TrackedPiece {
         if longSamples.count >= limit {
             longSamples.removeFirst(); shortSamples.removeFirst()
             rSamples.removeFirst(); gSamples.removeFirst(); bSamples.removeFirst()
+            if !sampleCameraHeights.isEmpty { sampleCameraHeights.removeFirst() }
+            if !sampleLevers.isEmpty { sampleLevers.removeFirst() }
+        }
+        let cameraHeight = observation.cameraPosition.map { $0.y - observation.position.y } ?? 0
+        if sampleCameraHeights.count == longSamples.count { sampleCameraHeights.append(cameraHeight) }
+        if sampleLevers.count == longSamples.count {
+            let lever = observation.cameraPosition.flatMap { HeightGeometry.lever(position: observation.position, camera: $0) }
+            sampleLevers.append(lever.map { ($0 * $0).sum().squareRoot() } ?? 0)
         }
         longSamples.append(observation.longMm)
         shortSamples.append(observation.shortMm)
@@ -153,6 +215,32 @@ public final class PieceTracker {
         public var deviceViewsPerPiece = 8
         public var deviceViewBaseline: Float = 0.03
 
+        // MARK: Height (`HeightGeometry`); used only for observations that carry their camera position.
+
+        /// Allow for pieces standing up off the table: place each by the table point under it, match detections after
+        /// allowing for the slide its height causes, and measure its outline at its height.
+        public var heightAware = true
+        /// Heights below this (mm) count as flat: lower than the depth noise and the fit can tell apart.
+        public var flatBelowMm: Float = 6
+        /// Height of the outline's middle as a share of the piece's height (its lift; see `HeightGeometry`).
+        public var liftFraction: Float = 0.5
+        /// Height at which the outline is measured, as a share of the piece's height.
+        public var scaleFraction: Float = 1
+        /// Frames with a depth height before depth decides the piece's height (median of them).
+        public var minDepthReadings = 2
+        /// Without depth: views, and how much they must differ (`HeightGeometry.LiftFit.spread`), before the
+        /// height is fitted from how the piece's spot slides.
+        public var minFitViews = 3
+        public var minLeverSpread: Float = 0.02
+        public var liftRidge: Float = 0.005
+        public var maxLift: Float = 0.04
+        /// Widen the match distance for a piece whose outline length changes a lot between views (it looks tall)
+        /// by `HeightGeometry.slideBound`, at most `maxSlide` metres, until its height is known.
+        public var maxSlide: Float = 0.02
+        /// A tall piece's size is measured from the half of its views taken most nearly from straight above (at least
+        /// this many), which show least of its side; 0 measures from all views.
+        public var steepViews = 3
+
         public init() {}
     }
 
@@ -192,14 +280,44 @@ public final class PieceTracker {
         let longMm = observation.longMm
         guard longMm >= settings.minLongMm, longMm <= settings.maxLongMm else { return nil }
 
-        let radius = max(settings.minMatchRadius, longMm / 1000 * settings.matchRadiusPerLength)
         var nearest: TrackedPiece?
-        var nearestDistance = radius
+        var nearestDistance = Float.infinity
         for piece in pieces where !matched.contains(piece.id) {
-            let d = TableMath.distance(piece.position, observation.position)
-            if d < nearestDistance { nearest = piece; nearestDistance = d }
+            if let d = matchDistance(piece, observation), d < nearestDistance { nearest = piece; nearestDistance = d }
         }
         return record(observation, into: nearest, time: time)
+    }
+
+    /// How far a detection is from a known piece, or nil if too far to be that piece.
+    ///
+    /// The plain rule: within the larger of `minMatchRadius` and `matchRadiusPerLength` times the detection's long side.
+    /// Height-aware, for a detection with its camera position: the detection is first moved to the base it implies
+    /// with the piece's lift (or, while the piece's height is unknown, the lift of this frame's depth height), and
+    /// compared with the piece's base. While the piece's height is still unknown and its outline length has varied a
+    /// lot between views, the distance allowed grows by how far the side of a tall piece could move the outline's middle.
+    func matchDistance(_ piece: TrackedPiece, _ observation: PieceObservation) -> Float? {
+        var radius = max(settings.minMatchRadius, observation.longMm / 1000 * settings.matchRadiusPerLength)
+        guard settings.heightAware, let camera = observation.cameraPosition, let base = piece.base,
+              let lever = HeightGeometry.lever(position: observation.position, camera: camera) else {
+            let d = TableMath.distance(piece.position, observation.position)
+            return d < radius ? d : nil
+        }
+        var lift = piece.lift
+        if piece.heightSource == .none, let h = observation.depthHeightMm, h >= settings.flatBelowMm {
+            lift = h / 1000 * settings.liftFraction
+        }
+        let moved = HeightGeometry.base(position: observation.position, lever: lever, lift: lift)
+        let d = TableMath.distance(SIMD3<Float>(base.x, moved.y, base.y), moved)
+        if piece.heightSource == .none, let shortest = piece.longSamples.min() {
+            let lengths = piece.longSamples + [observation.longMm]
+            let lowest = min(shortest, observation.longMm), highest = lengths.max() ?? lowest
+            if highest - lowest > max(3, 0.25 * lowest) {
+                let slide = HeightGeometry.slideBound(longMm: observation.longMm, shortestMm: lowest)
+                    + HeightGeometry.slideBound(longMm: TableMath.median(piece.longSamples), shortestMm: lowest)
+                radius += min(settings.maxSlide, slide)
+            }
+        }
+        return d < radius ? d : nil
     }
 
     /// Match all of one frame's detections at once, closest pairs first, or start tracking new pieces.
@@ -214,10 +332,8 @@ public final class PieceTracker {
         var candidates: [(observation: Int, piece: Int, distance: Float)] = []
         for (o, observation) in observations.enumerated() {
             guard observation.longMm >= settings.minLongMm, observation.longMm <= settings.maxLongMm else { continue }
-            let radius = max(settings.minMatchRadius, observation.longMm / 1000 * settings.matchRadiusPerLength)
             for (p, piece) in pieces.enumerated() where !matched.contains(piece.id) {
-                let d = TableMath.distance(piece.position, observation.position)
-                if d < radius { candidates.append((o, p, d)) }
+                if let d = matchDistance(piece, observation) { candidates.append((o, p, d)) }
             }
         }
         // Ties are broken by order so the result is deterministic.
@@ -248,7 +364,49 @@ public final class PieceTracker {
         matched.insert(piece.id)
         piece.addSample(observation, keeping: settings.sampleLimit)
         piece.bestQuality = max(piece.bestQuality, observation.quality)
+        if settings.heightAware, let camera = observation.cameraPosition,
+           let lever = HeightGeometry.lever(position: observation.position, camera: camera) {
+            if piece.placements.count >= settings.sampleLimit { piece.placements.removeFirst() }
+            piece.placements.append(TrackedPiece.Placement(spot: SIMD2(observation.position.x, observation.position.z),
+                                                           lever: lever, depthHeightMm: observation.depthHeightMm))
+            updateHeight(piece, tableY: observation.position.y)
+        }
         return piece
+    }
+
+    /// Work out a piece's height from its recent placements, then its base, position and measuring height.
+    ///
+    /// Depth decides when at least `minDepthReadings` frames measured it (their median). Otherwise, once there are
+    /// `minFitViews` views that differ enough, the lift is fitted from how the spot slid (`HeightGeometry.fitLift`) and
+    /// the height is the lift over `liftFraction`. Anything under `flatBelowMm` is flat: lift 0, and the base is simply
+    /// the mean spot. The position is the mean of the bases the placements imply with that lift.
+    func updateHeight(_ piece: TrackedPiece, tableY: Float) {
+        let placements = piece.placements
+        guard !placements.isEmpty else { return }
+        let depthHeights = placements.compactMap { $0.depthHeightMm }
+        var heightMm: Float = 0
+        if depthHeights.count >= settings.minDepthReadings {
+            heightMm = TableMath.median(depthHeights)
+            piece.heightSource = .depth
+        } else if placements.count >= settings.minFitViews,
+                  let fit = HeightGeometry.fitLift(positions: placements.map { $0.spot }, levers: placements.map { $0.lever },
+                                                   ridge: settings.liftRidge, maxLift: settings.maxLift),
+                  fit.spread >= settings.minLeverSpread {
+            heightMm = fit.lift / settings.liftFraction * 1000
+            piece.heightSource = .views
+        } else {
+            piece.heightSource = .none
+        }
+        if heightMm < settings.flatBelowMm { heightMm = 0 }
+        piece.heightMm = heightMm
+        piece.lift = heightMm / 1000 * settings.liftFraction
+        piece.scaleHeight = heightMm / 1000 * settings.scaleFraction
+        piece.minSteepViews = settings.steepViews
+        var sum = SIMD2<Float>(0, 0)
+        for placement in placements { sum += placement.spot - piece.lift * placement.lever }
+        let base = sum / Float(placements.count)
+        piece.base = base
+        piece.position = SIMD3<Float>(base.x, tableY, base.y)
     }
 
     /// Call after the last `observe` of each frame. Drops blobs that never firmed up (a passing hand, a shadow).

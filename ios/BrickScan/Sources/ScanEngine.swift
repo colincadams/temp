@@ -114,6 +114,14 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
         if let format = ARWorldTrackingConfiguration.recommendedVideoFormatFor4KResolution {
             config.videoFormat = format   // more pixels per piece for recognition
         }
+        // LiDAR phones: depth tells how tall each piece is, for placing and measuring it. The smoothed stream is
+        // ARKit's depth averaged over the last few frames: steadier on a still table, which is all a sweep looks at.
+        // Without LiDAR the tracker works out heights from how pieces seem to slide as the phone moves.
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+            config.frameSemantics.insert(.smoothedSceneDepth)
+        } else if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            config.frameSemantics.insert(.sceneDepth)
+        }
         session.run(config)
         queue.async { self.scanning = true }
     }
@@ -260,6 +268,12 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
         let projector = TableProjector(fx: k[0][0], fy: k[1][1], cx: k[2][0], cy: k[2][1],
                                        camera: Matrix4(c.0, c.1, c.2, c.3), tableY: tableY)
 
+        // LiDAR depth, when the phone has it: each piece's height, so the tracker places it by the table point under it
+        // and measures it at its own height. Without it the tracker works the height out from several views.
+        let depth = ScanEngine.depthMap(of: frame)
+        let resolution = frame.camera.imageResolution
+        let imageWidth = Float(resolution.width), imageHeight = Float(resolution.height)
+
         tracker.beginFrame()
         var deviceBudget = deviceViewsPerFrame
         // Real position and size of each detection on the table.
@@ -267,7 +281,14 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
         for blob in blobs {
             guard let spot = projector.locate(workX: blob.cx, workY: blob.cy, step: Float(work.step)) else { continue }
             let quality = PieceTracker.viewQuality(of: blob, frameWidth: work.width, frameHeight: work.height)
-            seen.append((blob, PieceObservation(blob: blob, position: spot.position, mmPerPixel: spot.mmPerPixel, quality: quality)))
+            var depthHeight: Float?
+            if let depth {
+                depthHeight = DepthHeight.heightMm(map: depth, blob: blob, step: Float(work.step), imageWidth: imageWidth,
+                                                   imageHeight: imageHeight, projector: projector)
+            }
+            let observation = PieceObservation(blob: blob, position: spot.position, mmPerPixel: spot.mmPerPixel, quality: quality,
+                                               cameraPosition: cameraPosition, depthHeightMm: depthHeight)
+            seen.append((blob, observation))
         }
         // Same spot as a piece we already know, or a new one? Matching the whole frame at once, closest pairs first,
         // stops a newly visible piece from taking over a neighbour's track (which would count the neighbour twice).
@@ -314,9 +335,7 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
         }
 
         // What this frame saw well enough to find whole pieces in.
-        let resolution = frame.camera.imageResolution
-        let update = coverageMap.add(view: projector, imageWidth: Float(resolution.width), imageHeight: Float(resolution.height),
-                                     inset: coverageInset)
+        let update = coverageMap.add(view: projector, imageWidth: imageWidth, imageHeight: imageHeight, inset: coverageInset)
         quietTime.record(time: time, cameraPosition: cameraPosition, update: update, confirmedCount: tracker.confirmed.count)
         if update.cellsInView > 0 {
             let map = coverageMap
@@ -555,6 +574,44 @@ final class ScanEngine: NSObject, ObservableObject, ARSessionDelegate, @unchecke
             }
         }
         return (out, width, height, step)
+    }
+
+    /// The frame's LiDAR depth (smoothed when available) and confidence, copied out of their pixel buffers, or nil on a
+    /// phone without LiDAR or a frame without depth. Same orientation and field of view as `capturedImage`.
+    private static func depthMap(of frame: ARFrame) -> DepthMap? {
+        guard let sceneDepth = frame.smoothedSceneDepth ?? frame.sceneDepth else { return nil }
+        let buffer = sceneDepth.depthMap
+        guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_DepthFloat32 else { return nil }
+        let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
+        guard width > 0, height > 0 else { return nil }
+
+        var depth = [Float](repeating: 0, count: width * height)
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
+        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+        for y in 0..<height {
+            let row = base.advanced(by: y * rowBytes).assumingMemoryBound(to: Float32.self)
+            for x in 0..<width { depth[y * width + x] = row[x] }
+        }
+
+        var confidence: [UInt8]?
+        if let confidenceBuffer = sceneDepth.confidenceMap,
+           CVPixelBufferGetPixelFormatType(confidenceBuffer) == kCVPixelFormatType_OneComponent8,
+           CVPixelBufferGetWidth(confidenceBuffer) == width, CVPixelBufferGetHeight(confidenceBuffer) == height {
+            CVPixelBufferLockBaseAddress(confidenceBuffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(confidenceBuffer, .readOnly) }
+            if let confidenceBase = CVPixelBufferGetBaseAddress(confidenceBuffer) {
+                let confidenceRowBytes = CVPixelBufferGetBytesPerRow(confidenceBuffer)
+                var levels = [UInt8](repeating: 0, count: width * height)
+                for y in 0..<height {
+                    let row = confidenceBase.advanced(by: y * confidenceRowBytes).assumingMemoryBound(to: UInt8.self)
+                    for x in 0..<width { levels[y * width + x] = row[x] }
+                }
+                confidence = levels
+            }
+        }
+        return DepthMap(width: width, height: height, depth: depth, confidence: confidence)
     }
 
     /// Full-resolution JPEG of one piece with a margin, turned upright for a phone held in portrait.

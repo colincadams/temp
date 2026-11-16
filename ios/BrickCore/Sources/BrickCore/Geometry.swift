@@ -56,13 +56,32 @@ public struct TableProjector {
     /// The table point seen at pixel (`px`, `py`), or nil if that pixel does not look down at the table
     /// or the table is too far along the ray to measure (4 or more times the ray's unit depth).
     public func point(_ px: Float, _ py: Float) -> SIMD3<Float>? {
+        point(px, py, height: 0)
+    }
+
+    /// The point seen at pixel (`px`, `py`) on the horizontal plane `height` metres above the table, or nil under the
+    /// same conditions as `point(_:_:)`.
+    public func point(_ px: Float, _ py: Float, height: Float) -> SIMD3<Float>? {
         // Image y grows downwards.
         let dir = camera * SIMD4<Float>((px - cx) / fx, -(py - cy) / fy, -1, 0)
         guard dir.y < -1e-4 else { return nil }
         let origin = camera.columns.3
-        let t = (tableY - origin.y) / dir.y
+        let planeY = tableY + height
+        let t = (planeY - origin.y) / dir.y
         guard t > 0, t < 4 else { return nil }
-        return SIMD3<Float>(origin.x + dir.x * t, tableY, origin.z + dir.z * t)
+        return SIMD3<Float>(origin.x + dir.x * t, planeY, origin.z + dir.z * t)
+    }
+
+    /// The world point seen at pixel (`px`, `py`) at `depth` metres along the camera's viewing axis (the distance
+    /// ARKit's scene depth reports).
+    public func unproject(_ px: Float, _ py: Float, depth: Float) -> SIMD3<Float> {
+        let p = camera * SIMD4<Float>((px - cx) / fx * depth, -(py - cy) / fy * depth, -depth, 1)
+        return SIMD3<Float>(p.x, p.y, p.z)
+    }
+
+    /// Where the camera is in world space.
+    public var cameraPosition: SIMD3<Float> {
+        SIMD3<Float>(camera.columns.3.x, camera.columns.3.y, camera.columns.3.z)
     }
 
     /// Where a spot of the downsampled work image lies on the table, and the scale there.

@@ -61,6 +61,19 @@ swift run -c release brick-replay ../../ml/sweeps/001 --detector maps     # the 
 
 The report says how many pieces were on the table, how many the camera showed whole in at least 3 processed frames (the ones the scan could fairly be expected to find), and of those how many were found, missed, or merged into a neighbour; and of the pieces counted, how many were a piece counted twice, two or more pieces taken as one, or nothing at all. It also gives the error of the measured length against the piece's true footprint, the position error, and how far the measured colour is from the catalog colour. `--list` prints every piece; the full report is saved as `replay-<detector>.json` in the sweep folder. `--match frame` matches each frame's detections to known pieces all at once instead of one at a time as the app does now.
 
+**Tall pieces and LiDAR depth.** A tall piece's outline takes in its side and top, so the spot where its middle projects onto the table slides as the camera moves, and its outline looks longer than the piece is. The tracker allows for this (`HeightGeometry`, `PieceTracker`): the middle of the outline sits about half-way up the piece, so a detection seen from camera `C` at height `H` lands at `p = B + e (p - C) / H`, with `B` the table point under the piece and `e` half its height. With depth, `e` comes from the piece's height measured in the LiDAR depth map (median of high-confidence depth pixels under the middle of the outline, then the median over its frames; `DepthHeight`). Without depth, `e` and `B` are fitted by least squares from the piece's views once there are three that differ enough. Heights under 6 mm count as flat. The piece is placed at `B`, new detections are matched after the same correction, and its size is measured at the height of its top, from the half of its views taken most nearly from straight above (which show least of its side).
+
+```sh
+# Render with the depth an iPhone Pro's ARKit would give (implies --ids); --tall lays out many tall pieces,
+# some stood on end and some stacked.
+python3 ml/render_sweep.py --ldraw ml/ldraw --out ml/sweeps/001 --seed 1 --depth \
+    --table-width 300 --table-depth 220 --image-width 640 --image-height 480 --samples 8
+swift run -c release brick-replay ../../ml/sweeps/001 --detector truth --depth on    # a phone with LiDAR
+swift run -c release brick-replay ../../ml/sweeps/001 --detector truth --depth off   # a phone without (default)
+```
+
+The report then also breaks the results down by the pieces' true height (under 6, 6-10, 10-20 and 20+ mm): found, counted twice, merged, measured over true length, and the height the tracker estimated against the true one. The depth maps are `NNNN.depth` (256 x 192 float32 metres along the viewing axis, rows top to bottom, the picture's field of view, as ARKit's `sceneDepth`) and `NNNN.conf` (one ARConfidenceLevel byte per pixel). They are made from Blender's exact depth with a LiDAR-like noise model (`phone_depth` in `render_sweep.py`): box-averaged to 256 x 192, so edges mix piece and table; noise of 1 cm standard deviation at 30 cm growing with the square of the distance, part independent per pixel and part smooth over a few pixels; confidence medium or low at depth steps; dark pieces noisier and partly medium confidence; transparent pieces partly seen through and low confidence; and a few outliers, some of them still marked high confidence.
+
 Each frame is stored for the tool as raw pixels at the detector's working size (`NNNN.rgba`, every `step`-th pixel as the app downsamples, `step` = width / 640), next to `NNNN.ids` (piece numbers, 16-bit) and `NNNN.maps` (detector output, 4 float32 planes of 320 x 240). For a sweep rendered before these existed, run `python3 ml/sweep_frames.py <sweep folder>`; true sizes then come from `--manifest ml/manifest.json`.
 
 ## Design
