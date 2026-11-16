@@ -298,6 +298,54 @@ def sweep_path(table_w, table_h, view_h, rng, speed=150.0, interval=0.2):
     return [(x + rng.uniform(-6, 6), y + rng.uniform(-6, 6)) for x, y in points]
 
 
+def add_motion_blur(folder, shutter, share, seed):
+    """Smear some frames as the camera's motion during a long exposure would, and record each frame's smear.
+
+    An approximation applied to the rendered frames, not Blender's motion blur: the sweep's camera also jitters its
+    tilt independently from frame to frame, which Blender would turn into a large, unphysical rotational smear. For a
+    camera translating over a flat table, the picture moves as a whole by focal length x displacement / height, so
+    the smear is a box blur of that length along that direction (pieces stand at most a few centimetres above the
+    table, so parallax changes the length by under 10% at 32 cm). The displacement is the camera's velocity at the
+    frame (from its neighbours' positions) times `shutter` seconds.
+
+    A random `share` of the frames (chosen with their own generator, so the scene is the same as without blur) get the
+    long exposure; the rest stay sharp. sweep.json gains `blurPx` per frame: the smear in full-resolution pixels.
+    Runs before write_frames, so the replay's NNNN.rgba carry the blur; the piece maps (--ids) stay sharp.
+    """
+    from scipy.ndimage import shift as shift_image
+
+    path = os.path.join(folder, "sweep.json")
+    with open(path) as f:
+        sweep = json.load(f)
+    frames = sweep["frames"]
+    chosen = set(random.Random(seed * 7919 + 17).sample(range(len(frames)), round(len(frames) * share)))
+    positions = [np.array(fr["transform"][12:15]) for fr in frames]
+    for i, frame in enumerate(frames):
+        frame["blurPx"] = 0.0
+        if i not in chosen or len(frames) < 2:
+            continue
+        a, b = max(0, i - 1), min(len(frames) - 1, i + 1)
+        velocity = (positions[b] - positions[a]) / max(1e-6, frames[b]["time"] - frames[a]["time"])
+        m = np.array(frame["transform"]).reshape(4, 4)   # rows are the matrix's columns
+        right, up = m[0, :3], m[1, :3]
+        depth = positions[i][1] - sweep["tableY"]
+        step = velocity * shutter * sweep["fx"] / depth  # full-resolution pixels the picture moves during the exposure
+        dx, dy = -float(step @ right), float(step @ up)   # image x grows right, y grows down
+        length = math.hypot(dx, dy)
+        if length < 0.5:
+            continue
+        image = np.asarray(Image.open(os.path.join(folder, frame["file"])).convert("RGB")).astype(np.float32)
+        n = max(2, math.ceil(length) + 1)
+        out = np.zeros_like(image)
+        for t in np.linspace(-0.5, 0.5, n):
+            out += shift_image(image, (t * dy, t * dx, 0), order=1, mode="nearest")
+        Image.fromarray(np.clip(out / n + 0.5, 0, 255).astype(np.uint8)).save(os.path.join(folder, frame["file"]), quality=92)
+        frame["blurPx"] = round(length, 2)
+    with open(path, "w") as f:
+        json.dump(sweep, f)
+    print(f"motion blur: {len(chosen)} of {len(frames)} frames smeared, up to {max(fr['blurPx'] for fr in frames):.1f} px")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default="ml/manifest.json")
@@ -316,6 +364,9 @@ def main():
     ap.add_argument("--ids", action="store_true", help="also write a piece-number map per frame (a quick second render pass)")
     ap.add_argument("--depth", action="store_true", help="also write the LiDAR depth and confidence maps ARKit would give (implies --ids)")
     ap.add_argument("--tall", action="store_true", help="lay the table out with many tall pieces: tall shapes, pieces on end, stacks")
+    ap.add_argument("--motion-blur", type=float, default=0, metavar="SECONDS",
+                    help="exposure time of the blurred frames: smear them by the camera's motion during it (see add_motion_blur)")
+    ap.add_argument("--blur-share", type=float, default=0.3, help="share of frames given the long exposure (with --motion-blur)")
     args = ap.parse_args()
     args.ids = args.ids or args.depth
 
@@ -401,6 +452,8 @@ def main():
     if args.depth:
         render_depth(scene, objects, bpy.data.objects["table"], poses, frames, (focal, focal, args.image_width / 2, args.image_height / 2),
                      pieces, palette, args.out, args.seed)
+    if args.motion_blur > 0:
+        add_motion_blur(args.out, args.motion_blur, args.blur_share, args.seed)
     write_frames(args.out)
     print(f"wrote {len(frames)} frames and {len(pieces)} pieces to {args.out}")
 

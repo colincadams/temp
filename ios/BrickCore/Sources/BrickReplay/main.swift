@@ -3,6 +3,7 @@ import Foundation
 
 let usage = """
 Usage: brick-replay <sweep folder> [--detector colour|truth|maps] [--manifest <manifest.json>] [--out <report.json>] [--match one|frame] [--list] [--depth on|off]
+       [--sharpness off|gate|views|on] [--negative-evidence [--miss-rate <r>]] [--consolidate] [--phantoms <n>] [--phantom-seed <n>]
 
 Plays a sweep rendered by ml/render_sweep.py through the app's scan pipeline (detect, place on the table, track,
 count once) and compares the pieces it counts with the pieces really on the table.
@@ -12,12 +13,21 @@ count once) and compares the pieces it counts with the pieces really on the tabl
              maps     the trained detector's output per frame, NNNN.maps (ml/sweep_maps.py)
   --manifest          ml/manifest.json, for true sizes when the sweep does not record them
   --out               where to write the report as JSON (default: <sweep folder>/replay-<detector>.json)
-  --match one         match each detection to known pieces one at a time, as the app does (default)
-          frame       match a frame's detections all at once, closest pairs first (PieceTracker.observe(frame:))
+  --match one         match each detection to known pieces one at a time (default; the app used to)
+          frame       match a frame's detections all at once, closest pairs first, as the app does (PieceTracker.observe(frame:))
   --list              also list every piece
   --depth on          measure each piece's height from the sweep's LiDAR depth maps (render_sweep.py --depth), as a
                       phone with LiDAR does
           off         work from the pictures alone, as a phone without LiDAR does (default)
+
+Techniques not yet in the app, off unless asked for (the report file name gains a suffix for each):
+  --sharpness gate    skip frames much less sharp than the recent ones (SharpnessGate)
+              views   fold each piece's region sharpness into its view quality, so its best view is a sharp one
+              on      both
+  --negative-evidence leave out pieces the camera keeps looking at without finding (VisibilityLedger)
+  --consolidate       merge tracks that are probably one piece when the scan ends (TrackConsolidation)
+  --miss-rate <r>     the detector's miss rate negative evidence assumes (default 0.6 for colour, 0.2 otherwise)
+  --phantoms <n>      inject n phantom detections, each in 3 processed frames and never again (--phantom-seed, default 1)
 """
 
 func fail(_ message: String) -> Never {
@@ -32,6 +42,7 @@ var manifestPath: String?
 var outPath: String?
 var listPieces = false
 var settings = ReplayRunner.Settings()
+var missRate: Float?
 while !arguments.isEmpty {
     let argument = arguments.removeFirst()
     func value() -> String {
@@ -58,6 +69,25 @@ while !arguments.isEmpty {
         case "off": settings.useDepth = false
         default: fail("--depth takes on or off\n\n\(usage)")
         }
+    case "--sharpness":
+        switch value() {
+        case "off": settings.sharpnessGate = false; settings.sharpnessViews = false
+        case "gate": settings.sharpnessGate = true; settings.sharpnessViews = false
+        case "views": settings.sharpnessGate = false; settings.sharpnessViews = true
+        case "on": settings.sharpnessGate = true; settings.sharpnessViews = true
+        default: fail("--sharpness takes off, gate, views or on\n\n\(usage)")
+        }
+    case "--negative-evidence": settings.negativeEvidence = true
+    case "--miss-rate":
+        guard let rate = Float(value()), rate > 0, rate < 1 else { fail("--miss-rate takes a number between 0 and 1\n\n\(usage)") }
+        missRate = rate
+    case "--consolidate": settings.consolidate = true
+    case "--phantoms":
+        guard let n = Int(value()), n >= 0 else { fail("--phantoms takes a number\n\n\(usage)") }
+        settings.phantoms = n
+    case "--phantom-seed":
+        guard let n = UInt64(value()) else { fail("--phantom-seed takes a number\n\n\(usage)") }
+        settings.phantomSeed = n
     case "-h", "--help": print(usage); exit(0)
     default:
         guard folderPath == nil, !argument.hasPrefix("-") else { fail("unexpected \(argument)\n\n\(usage)") }
@@ -65,6 +95,8 @@ while !arguments.isEmpty {
     }
 }
 guard let folderPath else { fail(usage) }
+// The colour threshold merges touching pieces, so it misses a piece in view far more often than the trained detector.
+settings.visibility.detectorMissRate = missRate ?? (detector == .colour ? 0.6 : 0.2)
 
 /// True extents by shape class id, from the manifest written by ml/build_manifest.py.
 func loadCatalogSizes(_ path: String) throws -> [Int: [Float]] {
@@ -89,8 +121,14 @@ do {
     print(ReplayScoring.text(report, listPieces: listPieces))
     print("\nHeight: " + (settings.useDepth ? "from the LiDAR depth maps" : "from the pictures alone (no depth)"))
     print(HeightReport.text(HeightReport.bands(report: report, run: run, sweep: folder.sweep)))
-    let out = outPath.map { URL(fileURLWithPath: $0) } ?? folder.url.appendingPathComponent(
-        "replay-\(detector.rawValue)\(settings.matchWholeFrame ? "-frame" : "")\(settings.useDepth ? "-depth" : "").json")
+    var suffix = settings.matchWholeFrame ? "-frame" : ""
+    if settings.useDepth { suffix += "-depth" }
+    if settings.sharpnessGate { suffix += "-sharpgate" }
+    if settings.sharpnessViews { suffix += "-sharpviews" }
+    if settings.negativeEvidence { suffix += "-negative" }
+    if settings.consolidate { suffix += "-consolidate" }
+    if settings.phantoms > 0 { suffix += "-phantoms\(settings.phantoms)" }
+    let out = outPath.map { URL(fileURLWithPath: $0) } ?? folder.url.appendingPathComponent("replay-\(detector.rawValue)\(suffix).json")
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     try encoder.encode(report).write(to: out)
