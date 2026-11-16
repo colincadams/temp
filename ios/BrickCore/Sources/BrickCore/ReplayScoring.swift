@@ -110,7 +110,42 @@ public enum ReplayScoring {
 
         public var pieces: [TruePieceRow]
         public var trackedPieces: [TrackedRow]
+
+        /// The techniques switched on for the run (`ReplayRunner.Run.techniques`).
+        public var techniques: [String]?
+        /// Confirmed pieces left out of the count by negative evidence, and by the end-of-scan consolidation.
+        public var setAsideDoubtful: SetAside?
+        public var setAsideMerged: SetAside?
+        /// Negative evidence: of the views that showed a counted real piece well inside the frame, the share in which
+        /// it was not detected (what `VisibilityLedger.Settings.detectorMissRate` should be).
+        public var realPieceMissRate: Float?
+        /// One minus detections per true piece shown whole, over all processed frames: the per-view miss rate of the
+        /// detector over every piece, including the ones it never tracked (a merged blob is one detection for two).
+        public var viewMissRate: Float?
+        /// Phantom detections injected, and how many of the scan's counted phantoms are those.
+        public var phantomsInjected: Int?
+        /// Sharpness: frames the gate rejected, milliseconds per frame spent on it, and, if the sweep records motion
+        /// blur, how many processed frames were blurred and how many counted pieces got their best view from one.
+        public var framesRejectedBlurred: Int?
+        public var sharpnessFrameMs: Double?
+        public var sharpnessRegionsMs: Double?
+        public var blurredFramesProcessed: Int?
+        public var bestViewBlurred: Int?
     }
+
+    /// What the confirmed pieces left out of the count turned out to be.
+    public struct SetAside: Codable, Equatable {
+        public var pieces = 0
+        /// A second track of a true piece that the count still has: rightly left out.
+        public var duplicate = 0
+        /// Nothing there: rightly left out.
+        public var phantom = 0
+        /// The only track of a true piece: wrongly left out, the piece is now missed.
+        public var realPieceLost = 0
+    }
+
+    /// A frame counts as blurred for the report when its smear is at least this many working pixels.
+    public static let blurredFromPx: Float = 2
 
     static func summary(_ values: [Float]) -> Summary {
         guard !values.isEmpty else { return Summary() }
@@ -220,9 +255,25 @@ public enum ReplayScoring {
     /// Score a finished replay.
     public static func report(sweep: ReplaySweep, run: ReplayRunner.Run, detector: ReplayDetector,
                               catalogSize: [Int: [Float]] = [:], settings: Settings = Settings()) -> Report {
-        let confirmed = run.tracked.filter { $0.confirmed }
+        let confirmed = run.tracked.filter { $0.counted }
         let (pieces, tracked) = score(truth: sweep.pieces, tracked: confirmed, wholeFrames: run.wholeFrames,
                                       catalogSize: catalogSize, settings: settings)
+        /// What the left-out tracks were, judged against the final count.
+        func setAside(_ rows: [ReplayRunner.TrackedResult]) -> SetAside {
+            var out = SetAside()
+            let foundIDs = Set(pieces.filter { $0.outcome == .found }.map { $0.id })
+            for t in rows {
+                out.pieces += 1
+                let near = sweep.pieces.filter { p in
+                    let dx = t.x - p.x, dz = t.z - p.z
+                    return (dx * dx + dz * dz).squareRoot() * 1000 <= max(settings.minToleranceMm, p.radiusMm)
+                }
+                if near.isEmpty { out.phantom += 1 }
+                else if near.contains(where: { foundIDs.contains($0.id) }) { out.duplicate += 1 }
+                else { out.realPieceLost += 1 }
+            }
+            return out
+        }
         var skipped: [String: Int] = [:]
         for frame in run.frames { if let reason = frame.skipped { skipped[reason, default: 0] += 1 } }
         let fair = pieces.filter { $0.couldBeSeen }
@@ -246,7 +297,7 @@ public enum ReplayScoring {
         let lengthSource = sweep.pieces.contains { $0.longMm != nil } ? "footprint from the renderer"
             : catalogSize.isEmpty ? "none" : "catalog size (largest extent; a piece on its side shows another)"
 
-        return Report(
+        var report = Report(
             detector: detector.rawValue,
             framesInSweep: run.frames.count,
             framesProcessed: run.frames.filter { $0.skipped == nil }.count,
@@ -257,7 +308,7 @@ public enum ReplayScoring {
             piecesOnTable: sweep.pieces.count,
             piecesCouldBeSeen: fair.count,
             piecesCounted: confirmed.count,
-            unconfirmedLeft: run.tracked.count - confirmed.count,
+            unconfirmedLeft: run.tracked.filter { !$0.confirmed }.count,
             found: fair.filter { $0.outcome == .found }.count,
             missed: fair.filter { $0.outcome != .found }.count,
             missedMergedIntoNeighbour: fair.filter { $0.outcome == .merged }.count,
@@ -275,6 +326,36 @@ public enum ReplayScoring {
             positionError: summary(clean.compactMap { $0.distanceMm }),
             pieces: pieces,
             trackedPieces: tracked)
+
+        if !run.techniques.isEmpty { report.techniques = run.techniques }
+        let techniques = Set(run.techniques)
+        if techniques.contains("negative evidence") {
+            report.setAsideDoubtful = setAside(run.tracked.filter { $0.confirmed && $0.doubtful })
+            var hits = 0, misses = 0
+            for (row, t) in zip(tracked, confirmed) where row.verdict == .found {
+                hits += t.hits ?? 0
+                misses += t.misses ?? 0
+            }
+            if hits + misses > 0 { report.realPieceMissRate = Float(misses) / Float(hits + misses) }
+            let processed = run.frames.filter { $0.skipped == nil }
+            let inView = processed.reduce(0) { $0 + $1.wholePieces.count }
+            let observed = processed.reduce(0) { $0 + $1.observations - $1.phantoms }
+            if inView > 0 { report.viewMissRate = max(0, 1 - Float(observed) / Float(inView)) }
+        }
+        if techniques.contains("consolidation") {
+            report.setAsideMerged = setAside(run.tracked.filter { $0.confirmed && !$0.doubtful && $0.absorbed })
+        }
+        if run.phantomsPlaced > 0 { report.phantomsInjected = run.phantomsPlaced }
+        if techniques.contains("sharpness gate") {
+            report.framesRejectedBlurred = run.frames.filter { $0.skipped == ReplayRunner.skippedBlurred }.count
+        }
+        report.sharpnessFrameMs = run.sharpnessFrameMs
+        report.sharpnessRegionsMs = run.sharpnessRegionsMs
+        if run.frames.contains(where: { $0.blurPx != nil }) {
+            report.blurredFramesProcessed = run.frames.filter { $0.skipped == nil && ($0.blurPx ?? 0) >= blurredFromPx }.count
+            report.bestViewBlurred = confirmed.filter { ($0.bestViewBlurPx ?? 0) >= blurredFromPx }.count
+        }
+        return report
     }
 
     /// The report in plain words.
@@ -283,6 +364,7 @@ public enum ReplayScoring {
         func pct(_ a: Int, _ b: Int) -> String { b > 0 ? " (\(f(Float(a) * 100 / Float(b), 0))%)" : "" }
         var lines: [String] = []
         lines.append("Detector: \(r.detector); detections matched to known pieces \(r.matching)")
+        if let techniques = r.techniques { lines.append("With: \(techniques.joined(separator: ", "))") }
         let skipped = r.framesSkipped.sorted { $0.key < $1.key }.map { "\($0.value) \($0.key)" }.joined(separator: ", ")
         lines.append("Frames: \(r.framesInSweep) in the sweep, \(r.framesProcessed) processed" + (skipped.isEmpty ? "" : "; skipped: \(skipped)"))
         lines.append("")
@@ -301,7 +383,23 @@ public enum ReplayScoring {
         lines.append("  a real piece, once                 \(r.trackedPieces.filter { $0.verdict == .found }.count)")
         lines.append("  a piece counted twice              \(r.countedTwice)")
         lines.append("  two or more pieces taken as one    \(r.merged)")
-        lines.append("  nothing there (phantom)            \(r.phantom)")
+        lines.append("  nothing there (phantom)            \(r.phantom)" + (r.phantomsInjected.map { "   (\($0) phantom detections were injected)" } ?? ""))
+        func setAsideLine(_ s: SetAside) -> String {
+            "\(s.pieces): \(s.duplicate) a piece's second track, \(s.phantom) nothing there, \(s.realPieceLost) a real piece now missed"
+        }
+        if let s = r.setAsideDoubtful {
+            lines.append("Left out as doubtful (negative evidence): \(setAsideLine(s))"
+                         + (r.realPieceMissRate.map { "; counted real pieces were missed in \(f($0 * 100, 0))% of the views that showed them well" } ?? "")
+                         + (r.viewMissRate.map { "; detections per piece in view fall \(f($0 * 100, 0))% short" } ?? ""))
+        }
+        if let s = r.setAsideMerged { lines.append("Merged at the end (consolidation):        \(setAsideLine(s))") }
+        if let rejected = r.framesRejectedBlurred {
+            lines.append("Frames rejected as blurred: \(rejected)" + (r.sharpnessFrameMs.map { String(format: "; sharpness cost %.3f ms per frame", $0) } ?? ""))
+        }
+        if let ms = r.sharpnessRegionsMs { lines.append(String(format: "Piece-region sharpness: %.3f ms per processed frame", ms)) }
+        if let blurred = r.blurredFramesProcessed {
+            lines.append("Blurred frames processed (smear of \(f(blurredFromPx, 0))+ px): \(blurred); counted pieces whose best view is a blurred frame: \(r.bestViewBlurred ?? 0)")
+        }
         lines.append("")
         if r.longError.count > 0 {
             lines.append("Length, measured minus true (\(r.lengthSource)), over \(r.longError.count) pieces found:")
