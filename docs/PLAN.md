@@ -50,6 +50,32 @@ Verification without a phone: every screen gets SwiftUI previews with sample dat
 
 Order: A1-A3 (server), A5, A6, A4, then B2 and B3, B4, B1, A7, A8, B5, B6.
 
+## Techniques from continuous-scanning apps
+
+Room-scanning and 3D-capture apps share a toolkit. Where this app stands against it:
+
+| Technique | Status |
+| --- | --- |
+| Camera tracking from motion and image features (ARKit world tracking) | Used |
+| Finding the table plane | Used |
+| Fusing many views of each object into one estimate | Used for shape (up to 8 views averaged); colour and size use running medians |
+| One identity per object in world space, so overlapping passes do not double count | Used; matched per frame, closest pairs first |
+| Live coverage feedback and a "done" signal | Used (coverage map, "looks complete") |
+| Gating frames on camera motion and tilt | Used |
+| Locking white balance during capture | Used |
+| Depth from LiDAR to place and size objects | In progress (with a geometry-only fallback for phones without LiDAR) |
+| Choosing the sharpest frames (keyframe selection) | In progress |
+| Removing objects that are not seen again when looked for (negative evidence) | In progress |
+| Final clean-up pass after capture | In progress |
+| Anchoring objects so ARKit's drift corrections move them too | Next: pieces are stored as raw world positions, so a long sweep's drift can split one piece into two |
+| Recovering after tracking is lost (interruption, covered camera) | Next: today frames are skipped, but a relocalised world can be shifted |
+| Masking the user's hands (ARKit person segmentation) | Next: a hand in view can become a phantom piece |
+| Locking exposure as well as white balance, with a short shutter | Next: brightness changes shift measured colour; blur hurts recognition |
+| Grabbing a full-resolution still for uncertain pieces | Next: ARKit can capture a high-resolution frame on demand |
+| Saving and resuming a scan (ARKit world map) | Later |
+| Coaching overlay while tracking starts | Later (ARKit provides one) |
+| Dense 3D reconstruction (scene mesh, fused depth volume) | Not planned: Lego pieces are smaller than the mesh's detail, and per-piece depth gives what is needed |
+
 ## Part C: accuracy, once real photos exist
 
 ### C0. Before any photos
